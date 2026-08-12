@@ -21,21 +21,39 @@ impl QueryEngine {
         continuation: TurnContinuation,
         cycle_turn_id: Option<coco_types::TurnId>,
         stop_reason: Option<coco_messages::StopReason>,
-    ) -> Option<coco_event_types::TurnEndedParams> {
-        self.flush_successful_turn_state(history).await;
+    ) -> TurnFinalization {
+        if let Err(error) = self.flush_successful_turn_state(history).await {
+            let error = coco_event_types::ErrorPayload {
+                message: format!("failed to persist session transcript: {error}"),
+                code: coco_event_types::ErrorCode::Io,
+            };
+            warn!(message = %error.message, "turn durability barrier failed");
+            let terminal = cycle_turn_id.map(|id| {
+                coco_event_types::TurnEndedParams::failed(id, Some(usage), error.clone())
+            });
+            return TurnFinalization {
+                terminal,
+                persistence_error: Some(error),
+            };
+        }
         self.emit_reasoning_metadata_for_last_assistant(event_tx, history, &usage, None)
             .await;
-        if continuation.is_terminal()
+        let terminal = if continuation.is_terminal()
             && let Some(id) = cycle_turn_id
         {
-            return Some(Self::build_turn_ended_completed(
+            Some(Self::build_turn_ended_completed(
                 id,
                 usage,
                 history.len(),
                 stop_reason,
-            ));
+            ))
+        } else {
+            None
+        };
+        TurnFinalization {
+            terminal,
+            persistence_error: None,
         }
-        None
     }
 
     /// Build the protocol completion event for a successful model turn.
@@ -73,7 +91,10 @@ impl QueryEngine {
     /// post-turn forks read the parent cache slot. Kept separate from
     /// `TurnCompleted` emission so text-only exits can run promptSuggestion
     /// after cache save but before closing the protocol turn.
-    pub(crate) async fn flush_successful_turn_state(&self, history: &mut MessageHistory) {
+    pub(crate) async fn flush_successful_turn_state(
+        &self,
+        history: &mut MessageHistory,
+    ) -> coco_session::Result<()> {
         // D8: snapshot post-turn cache-safe params for engine-owned fork
         // features such as prompt suggestion and compaction.
         // Helper handles the empty-history skip + serialisation.
@@ -84,7 +105,7 @@ impl QueryEngine {
         // already in the cross-engine dedup set. Skips silently when
         // the store / session id / dedup set aren't all wired (e.g.
         // tests, headless runs without persistence).
-        self.record_transcript_tail(history).await;
+        self.record_transcript_tail(history).await
     }
 
     /// Build `TurnEnded(Completed)`.
@@ -215,7 +236,10 @@ impl QueryEngine {
     /// compaction boundary, so both sinks track the latest history.
     ///
     /// [`LiveTranscript`]: coco_tool_runtime::LiveTranscript
-    pub(crate) async fn record_transcript_tail(&self, history: &MessageHistory) {
+    pub(crate) async fn record_transcript_tail(
+        &self,
+        history: &MessageHistory,
+    ) -> coco_session::Result<()> {
         // Publish the post-turn message history to the live sink read by
         // the AgentSummary timer. Independent of the durable transcript
         // store below — a sub-agent may have a live reader without a
@@ -231,7 +255,7 @@ impl QueryEngine {
                 .as_ref()
                 .map(coco_types::SessionId::as_str),
         ) else {
-            return;
+            return Ok(());
         };
 
         let cwd_path = self.config.workspace_cwd();
@@ -277,17 +301,13 @@ impl QueryEngine {
                 starting_parent_uuid: None,
                 git_branch,
             };
-            if let Err(e) =
-                store.append_agent_message_chain(sid, agent_id, &message_refs, &mut seen, options)
-            {
-                warn!(error = %e, "failed to append subagent transcript chain");
-            }
-            return;
+            store.append_agent_message_chain(sid, agent_id, &message_refs, &mut seen, options)?;
+            return Ok(());
         }
 
         // Main thread: shared per-session dedup, main session transcript file.
         let Some(seen) = self.transcript_dedup.as_ref() else {
-            return;
+            return Ok(());
         };
         let mut seen_guard = seen.lock().await;
         let options = coco_session::storage::ChainWriteOptions {
@@ -298,9 +318,8 @@ impl QueryEngine {
             starting_parent_uuid: None,
             git_branch,
         };
-        if let Err(e) = store.append_message_chain(sid, &message_refs, &mut seen_guard, options) {
-            warn!(error = %e, "failed to append transcript chain");
-        }
+        store.append_message_chain(sid, &message_refs, &mut seen_guard, options)?;
+        Ok(())
     }
 
     /// Seed the tool-result budget / content-replacement state for a RESUMED

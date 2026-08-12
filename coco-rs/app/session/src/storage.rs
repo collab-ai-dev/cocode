@@ -1,7 +1,8 @@
-//! Session transcript persistence via JSONL rollout format.
+//! Session transcript persistence via a segmented JSONL journal.
 //!
 //! JSONL append-only transcript at
-//! `config home/projects/{sanitized_cwd}/{session_id}.jsonl`.
+//! `config home/projects/{sanitized_cwd}/{session_id}.jsonl` plus numbered
+//! `.segment-NNNNNN` rotations.
 //!
 //! Each line is a self-contained JSON entry: transcript messages
 //! (user/assistant/system), metadata entries (custom-title, tag,
@@ -62,9 +63,12 @@ use wire::source_assistant_uuid_for_tool_result;
 use wire::tool_result_use_id;
 pub use wire::transcript_entries_for_message;
 
-/// Maximum transcript file size we will fully read into memory (50 MB).
-const MAX_TRANSCRIPT_READ_BYTES: u64 = 50 * 1024 * 1024;
-const MAX_TRANSCRIPT_APPEND_BYTES: usize = MAX_TRANSCRIPT_READ_BYTES as usize;
+/// Maximum size of one journal segment. A session may own any number of
+/// segments; the bound limits individual reads and transactions, not session
+/// lifetime.
+pub(crate) const MAX_TRANSCRIPT_SEGMENT_BYTES: u64 = 50 * 1024 * 1024;
+const MAX_TRANSCRIPT_APPEND_BYTES: usize = MAX_TRANSCRIPT_SEGMENT_BYTES as usize;
+const TRANSCRIPT_SEGMENT_MARKER: &str = ".segment-";
 
 type AppendLock = Arc<Mutex<()>>;
 static APPEND_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
@@ -1226,9 +1230,9 @@ impl TranscriptStore {
         ))
     }
 
-    /// Load all entries from a transcript file.
-    /// Skips blank and malformed lines (logged as `Unknown`). Refuses to
-    /// read files larger than [`MAX_TRANSCRIPT_READ_BYTES`] to prevent OOM.
+    /// Load all entries from the transcript journal in segment order.
+    /// Skips blank and malformed lines (logged as `Unknown`). Each segment is
+    /// independently bounded so a long-running session can continue rotating.
     pub fn load_entries(&self, session_id: &str) -> crate::Result<Vec<Entry>> {
         let path = self.transcript_path(session_id);
         load_entries_from_file(&path)
@@ -1250,9 +1254,9 @@ impl TranscriptStore {
             .collect())
     }
 
-    /// Scan transcript JSONL one physical record at a time and stop at the
+    /// Scan transcript journal one physical record at a time and stop at the
     /// first matching message. This is the cancellation-aware search path for
-    /// `/resume`: it never materializes the whole (up to 50 MiB) transcript.
+    /// `/resume`: it never materializes the whole transcript.
     pub fn find_transcript_text(
         &self,
         session_id: &str,
@@ -1288,13 +1292,10 @@ impl TranscriptStore {
         self.transcript_path(session_id).exists()
     }
 
-    /// Delete a transcript file.
+    /// Delete every segment in a transcript journal.
     pub fn delete(&self, session_id: &str) -> crate::Result<()> {
         let path = self.transcript_path(session_id);
-        if path.exists() {
-            std::fs::remove_file(&path)?;
-        }
-        Ok(())
+        remove_transcript_journal(&path)
     }
 }
 
@@ -1543,7 +1544,8 @@ fn append_entry_to_file(path: &Path, entry: &Entry) -> crate::Result<()> {
 
 /// Serialize a bounded chain before opening the file, then append it as one
 /// rollback-capable transaction. The per-path lock is the in-process single
-/// writer; cross-process writers are excluded by the session write lease.
+/// writer; every process also locks the stable base file before discovering or
+/// rotating segments.
 fn append_entries_to_file(path: &Path, entries: &[Entry]) -> crate::Result<()> {
     if entries.is_empty() {
         return Ok(());
@@ -1554,6 +1556,18 @@ fn append_entries_to_file(path: &Path, entries: &[Entry]) -> crate::Result<()> {
         serde_json::to_writer(&mut payload, entry)?;
         payload.write_all(b"\n")?;
     }
+    append_jsonl_payload(path, payload.as_slice())
+}
+
+pub(crate) fn append_jsonl_payload(path: &Path, payload: &[u8]) -> crate::Result<()> {
+    if payload.is_empty() {
+        return Ok(());
+    }
+    if payload.len() > MAX_TRANSCRIPT_APPEND_BYTES {
+        return Err(crate::SessionError::generic(format!(
+            "transcript transaction exceeds {MAX_TRANSCRIPT_APPEND_BYTES} bytes"
+        )));
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -1561,24 +1575,43 @@ fn append_entries_to_file(path: &Path, entries: &[Entry]) -> crate::Result<()> {
     let _guard = path_lock
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut file = std::fs::OpenOptions::new()
+    let mut coordinator = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
         .open(path)?;
-    fs2::FileExt::lock_exclusive(&file)?;
-    let resulting_len = file
-        .metadata()?
-        .len()
-        .saturating_add(payload.as_slice().len() as u64);
-    if resulting_len > MAX_TRANSCRIPT_READ_BYTES {
+    fs2::FileExt::lock_exclusive(&coordinator)?;
+    let segments = transcript_segment_paths(path)?;
+    let (segment_index, mut target) = segments
+        .last()
+        .map(|(index, path)| (*index, path.clone()))
+        .unwrap_or_else(|| (0, path.to_path_buf()));
+    let current_len = match target.metadata() {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(error) => return Err(error.into()),
+    };
+    if current_len > MAX_TRANSCRIPT_SEGMENT_BYTES {
         return Err(crate::SessionError::generic(format!(
-            "transcript append would exceed the {MAX_TRANSCRIPT_READ_BYTES}-byte readable limit: {}",
-            path.display(),
+            "transcript segment too large ({current_len} bytes, max {MAX_TRANSCRIPT_SEGMENT_BYTES}): {}",
+            target.display(),
         )));
     }
-    write_payload_transactionally(&mut file, payload.as_slice())?;
+    if current_len.saturating_add(payload.len() as u64) > MAX_TRANSCRIPT_SEGMENT_BYTES {
+        target = transcript_segment_path(path, segment_index.saturating_add(1));
+    }
+    if target == path {
+        write_payload_transactionally(&mut coordinator, payload)?;
+    } else {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(target)?;
+        write_payload_transactionally(&mut file, payload)?;
+    }
     Ok(())
 }
 
@@ -1594,6 +1627,68 @@ fn append_lock_for(path: &Path) -> AppendLock {
     let lock = Arc::new(Mutex::new(()));
     locks.insert(path.to_path_buf(), Arc::downgrade(&lock));
     lock
+}
+
+fn transcript_segment_path(base: &Path, index: usize) -> PathBuf {
+    if index == 0 {
+        return base.to_path_buf();
+    }
+    let mut filename = base.file_name().unwrap_or_default().to_os_string();
+    filename.push(format!("{TRANSCRIPT_SEGMENT_MARKER}{index:06}"));
+    base.with_file_name(filename)
+}
+
+/// Discover journal segments by their numeric suffix. The base `.jsonl` is
+/// segment zero and remains the stable catalog/resume handle.
+pub(crate) fn transcript_segment_paths(path: &Path) -> crate::Result<Vec<(usize, PathBuf)>> {
+    let Some(parent) = path.parent() else {
+        return Ok(Vec::new());
+    };
+    let Some(base_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(Vec::new());
+    };
+    let entries = match std::fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let prefix = format!("{base_name}{TRANSCRIPT_SEGMENT_MARKER}");
+    let mut segments = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let candidate = entry.path();
+        if candidate == path {
+            if entry.file_type()?.is_file() {
+                segments.push((0, candidate));
+            }
+            continue;
+        }
+        let Some(name) = candidate.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(suffix) = name.strip_prefix(&prefix) else {
+            continue;
+        };
+        let Ok(index) = suffix.parse::<usize>() else {
+            continue;
+        };
+        if index > 0 && suffix == format!("{index:06}") && entry.file_type()?.is_file() {
+            segments.push((index, candidate));
+        }
+    }
+    segments.sort_unstable_by_key(|(index, _)| *index);
+    Ok(segments)
+}
+
+pub(crate) fn remove_transcript_journal(path: &Path) -> crate::Result<()> {
+    for (_, segment) in transcript_segment_paths(path)? {
+        match std::fs::remove_file(segment) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
 }
 
 struct BoundedPayload {
@@ -1670,6 +1765,14 @@ fn write_payload_transactionally<W: TransactionalAppend>(
             ));
         }
         writer.seek(SeekFrom::Start(original_len))?;
+        if let Err(rollback_error) = writer.commit() {
+            return Err(std::io::Error::new(
+                rollback_error.kind(),
+                format!(
+                    "transcript append failed ({write_error}); rollback durability failed ({rollback_error})"
+                ),
+            ));
+        }
         return Err(write_error);
     }
     Ok(())
@@ -1677,33 +1780,30 @@ fn write_payload_transactionally<W: TransactionalAppend>(
 
 /// Load and parse all JSONL entries from a file.
 fn load_entries_from_file(path: &Path) -> crate::Result<Vec<Entry>> {
-    if !path.exists() {
+    let segments = transcript_segment_paths(path)?;
+    if segments.is_empty() {
         return Err(crate::SessionError::TranscriptNotFound {
             path: path.to_path_buf(),
         });
     }
-
-    let meta = std::fs::metadata(path)?;
-    if meta.len() > MAX_TRANSCRIPT_READ_BYTES {
-        return Err(crate::SessionError::generic(format!(
-            "transcript file too large ({} bytes, max {MAX_TRANSCRIPT_READ_BYTES}): {}",
-            meta.len(),
-            path.display(),
-        )));
-    }
-
-    let file = std::fs::File::open(path)?;
-    let reader = std::io::BufReader::new(file);
     let mut entries = Vec::new();
-
-    for line in reader.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
+    for (_, segment) in segments {
+        let meta = std::fs::metadata(&segment)?;
+        if meta.len() > MAX_TRANSCRIPT_SEGMENT_BYTES {
+            return Err(crate::SessionError::generic(format!(
+                "transcript segment too large ({} bytes, max {MAX_TRANSCRIPT_SEGMENT_BYTES}): {}",
+                meta.len(),
+                segment.display(),
+            )));
         }
-        entries.push(parse_entry(&line));
+        let reader = std::io::BufReader::new(std::fs::File::open(segment)?);
+        for line in reader.lines() {
+            let line = line?;
+            if !line.trim().is_empty() {
+                entries.push(parse_entry(&line));
+            }
+        }
     }
-
     Ok(entries)
 }
 

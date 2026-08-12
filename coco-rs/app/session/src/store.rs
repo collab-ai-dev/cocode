@@ -511,11 +511,7 @@ impl SessionCatalog for DiskCatalog {
         let Some(resolved) = self.resolve(session_id, cwd_hint)? else {
             return Ok(());
         };
-        match std::fs::remove_file(&resolved.transcript_path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e.into()),
-        }
+        crate::storage::remove_transcript_journal(&resolved.transcript_path)
     }
 }
 

@@ -53,7 +53,7 @@ impl QueryEngine {
         hook_tx_opt: Option<&tokio::sync::mpsc::Sender<coco_hooks::HookExecutionEvent>>,
         cycle_turn_id: Option<coco_types::TurnId>,
         turn_id: &str,
-    ) -> PreparedTurnRequest {
+    ) -> Result<PreparedTurnRequest, crate::assistant_payload::AssistantPayloadError> {
         let live_permission_mode = match self.app_state.as_ref() {
             Some(state) => state
                 .read()
@@ -155,7 +155,7 @@ impl QueryEngine {
 
             let built_prompt = self
                 .build_prompt_with_recovery(history, &turn_state.recovery_context)
-                .await;
+                .await?;
             let built_tool_definitions = self
                 .build_tool_definitions_from_materialization(
                     &app_state_snapshot,
@@ -163,7 +163,10 @@ impl QueryEngine {
                 )
                 .await;
 
-            (built_prompt, built_tool_definitions)
+            Ok::<_, crate::assistant_payload::AssistantPayloadError>((
+                built_prompt,
+                built_tool_definitions,
+            ))
         }
         .instrument(tracing::info_span!(
             crate::trace_names::PROMPT_CONTEXT_LOADING,
@@ -173,7 +176,7 @@ impl QueryEngine {
             context_window = consts.context_window,
             effective_window = consts.effective_window,
         ))
-        .await;
+        .await?;
         let tool_defs: Vec<_> = tool_definitions.into_iter().map(|d| d.tool).collect();
 
         let context_management = if active_snapshot.supports_server_side_context_edits {
@@ -381,7 +384,7 @@ impl QueryEngine {
             "opening LLM stream"
         );
 
-        PreparedTurnRequest {
+        Ok(PreparedTurnRequest {
             params,
             active_snapshot,
             prompt_context,
@@ -390,6 +393,6 @@ impl QueryEngine {
             streaming_ctx,
             streaming_handle,
             streaming_model_index: 0,
-        }
+        })
     }
 }

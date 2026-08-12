@@ -1094,6 +1094,42 @@ async fn oversized_generated_media_keeps_transcript_bounded_and_writes_artifact(
 }
 
 #[tokio::test]
+async fn transcript_write_failure_fails_the_turn_instead_of_reporting_completion() {
+    let session_id = coco_types::SessionId::try_new("durability-failure-session").unwrap();
+    let tempdir = tempfile::tempdir().unwrap();
+    let store = Arc::new(coco_session::TranscriptStore::new(Arc::new(
+        coco_paths::ProjectPaths::new(
+            tempdir.path().to_path_buf(),
+            std::path::Path::new("/durability-failure"),
+        ),
+    )));
+    std::fs::create_dir_all(store.transcript_path(session_id.as_str()))
+        .expect("block transcript path with a directory");
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        session_id.clone(),
+        crate::test_support::model_runtime_registry(Arc::new(TextMock {
+            text: "answer".into(),
+        })),
+        Arc::new(ToolRegistry::new()),
+        CancellationToken::new(),
+        None,
+    )
+    .with_transcript_store(store, session_id)
+    .with_transcript_dedup(Arc::new(tokio::sync::Mutex::new(
+        std::collections::HashSet::new(),
+    )));
+
+    let result = engine.run("persist me").await.expect("query result");
+
+    let error = result
+        .failure()
+        .expect("durability failure must fail query");
+    assert_eq!(error.code, coco_event_types::ErrorCode::Io);
+    assert!(error.message.contains("persist session transcript"));
+}
+
+#[tokio::test]
 async fn text_only_end_turn_emits_reasoning_metadata() {
     let model = Arc::new(ReasoningTextMock {
         reasoning: "I should answer briefly.".into(),
@@ -1588,7 +1624,7 @@ async fn build_prompt_returns_prompt_context_metadata() {
     );
     let history = coco_messages::MessageHistory::new();
 
-    let built = engine.build_prompt(&history).await;
+    let built = engine.build_prompt(&history).await.expect("build prompt");
 
     assert_eq!(built.prompt_context.system_prompt(), "system from config");
     assert_eq!(built.prompt_context.epoch.as_str().len(), 64);

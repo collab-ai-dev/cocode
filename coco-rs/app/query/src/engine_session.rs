@@ -404,7 +404,9 @@ impl QueryEngine {
         // that return before the normal finalize path. UUID dedup makes this
         // a no-op for already-recorded messages while ensuring a synthetic
         // api_error and the last partial assistant output are durable.
-        self.record_transcript_tail(&history).await;
+        if let Err(error) = self.record_transcript_tail(&history).await {
+            warn!(%error, "failed to persist final transcript tail");
+        }
 
         // StopFailure — fire-and-forget hooks when the turn ended in an
         // API / runtime error rather than a clean stop. Output and exit

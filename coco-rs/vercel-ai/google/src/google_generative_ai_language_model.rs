@@ -1018,7 +1018,7 @@ impl LanguageModelV4 for GoogleGenerativeAILanguageModel {
 
 struct StreamState {
     byte_stream: vercel_ai_provider_utils::ByteStream,
-    buffer: String,
+    decoder: vercel_ai_provider_utils::SseDecoder,
     id_gen: Arc<dyn Fn() -> String + Send + Sync>,
     include_raw: bool,
     text_id: Option<String>,
@@ -1067,7 +1067,7 @@ pub fn create_google_stream(
     let stream = futures::stream::unfold(
         StreamState {
             byte_stream,
-            buffer: String::new(),
+            decoder: vercel_ai_provider_utils::SseDecoder::new(),
             id_gen,
             include_raw,
             text_id: None,
@@ -1104,74 +1104,43 @@ pub fn create_google_stream(
 
             use futures::TryStreamExt;
             loop {
+                match state.decoder.next_event() {
+                    Ok(Some(event)) if event.data == "[DONE]" => continue,
+                    Ok(Some(event)) => match process_google_sse_event(&mut state, &event.data) {
+                        Ok(mut parts) if !parts.is_empty() => {
+                            let first = parts.remove(0);
+                            parts.reverse();
+                            state.pending_parts = parts;
+                            return Some((Ok(first), state));
+                        }
+                        Ok(_) => continue,
+                        Err(error) => {
+                            let part = LanguageModelV4StreamPart::Error {
+                                error: vercel_ai_provider::StreamError::new(format!(
+                                    "Failed to parse chunk: {error}"
+                                )),
+                            };
+                            return Some((Ok(part), state));
+                        }
+                    },
+                    Ok(None) => {}
+                    Err(error) => {
+                        state.done = true;
+                        return Some((
+                            Err(AISdkError::new(format!("SSE framing error: {error}"))),
+                            state,
+                        ));
+                    }
+                }
+
                 match state.byte_stream.try_next().await {
                     Ok(Some(bytes)) => {
-                        let chunk = String::from_utf8_lossy(&bytes);
-                        state.buffer.push_str(&chunk);
-
-                        // Process SSE lines
-                        while let Some(pos) = state.buffer.find('\n') {
-                            let line = state.buffer[..pos].trim().to_string();
-                            state.buffer = state.buffer[pos + 1..].to_string();
-
-                            if line.is_empty() || line == "data: [DONE]" {
-                                continue;
-                            }
-
-                            if let Some(data) = line.strip_prefix("data: ") {
-                                // Code Assist wraps each chunk as `{"response": {...}}`;
-                                // unwrap to the inner response before mapping.
-                                let parsed = match state.envelope {
-                                    ChunkEnvelope::Direct => {
-                                        serde_json::from_str::<GoogleGenerateContentResponse>(data)
-                                    }
-                                    ChunkEnvelope::CodeAssistWrapped => {
-                                        serde_json::from_str::<Value>(data).and_then(|v| {
-                                            let inner =
-                                                v.get("response").cloned().unwrap_or(Value::Null);
-                                            serde_json::from_value::<GoogleGenerateContentResponse>(
-                                                inner,
-                                            )
-                                        })
-                                    }
-                                };
-                                match parsed {
-                                    Ok(response) => {
-                                        let mut stream_ctx = StreamProcessingContext {
-                                            id_gen: &state.id_gen,
-                                            text_id: &mut state.text_id,
-                                            reasoning_id: &mut state.reasoning_id,
-                                            tool_call_ids: &mut state.tool_call_ids,
-                                            seen_source_urls: &mut state.seen_source_urls,
-                                            include_raw: state.include_raw,
-                                            provider_options_name: &state.provider_options_name,
-                                            last_code_execution_tool_call_id: &mut state
-                                                .last_code_execution_tool_call_id,
-                                            last_grounding_metadata: &mut state
-                                                .last_grounding_metadata,
-                                            last_url_context_metadata: &mut state
-                                                .last_url_context_metadata,
-                                        };
-                                        let parts =
-                                            process_stream_chunk(&response, &mut stream_ctx, data);
-                                        if !parts.is_empty() {
-                                            let mut parts = parts;
-                                            let first = parts.remove(0);
-                                            parts.reverse();
-                                            state.pending_parts = parts;
-                                            return Some((Ok(first), state));
-                                        }
-                                    }
-                                    Err(e) => {
-                                        let part = LanguageModelV4StreamPart::Error {
-                                            error: vercel_ai_provider::StreamError::new(format!(
-                                                "Failed to parse chunk: {e}"
-                                            )),
-                                        };
-                                        return Some((Ok(part), state));
-                                    }
-                                }
-                            }
+                        if let Err(error) = state.decoder.push(&bytes) {
+                            state.done = true;
+                            return Some((
+                                Err(AISdkError::new(format!("SSE framing error: {error}"))),
+                                state,
+                            ));
                         }
                     }
                     Ok(None) => {
@@ -1210,6 +1179,33 @@ pub fn create_google_stream(
     );
 
     Box::pin(stream)
+}
+
+fn process_google_sse_event(
+    state: &mut StreamState,
+    data: &str,
+) -> Result<Vec<LanguageModelV4StreamPart>, serde_json::Error> {
+    let response = match state.envelope {
+        ChunkEnvelope::Direct => serde_json::from_str::<GoogleGenerateContentResponse>(data)?,
+        ChunkEnvelope::CodeAssistWrapped => {
+            let value = serde_json::from_str::<Value>(data)?;
+            let inner = value.get("response").cloned().unwrap_or(Value::Null);
+            serde_json::from_value::<GoogleGenerateContentResponse>(inner)?
+        }
+    };
+    let mut stream_ctx = StreamProcessingContext {
+        id_gen: &state.id_gen,
+        text_id: &mut state.text_id,
+        reasoning_id: &mut state.reasoning_id,
+        tool_call_ids: &mut state.tool_call_ids,
+        seen_source_urls: &mut state.seen_source_urls,
+        include_raw: state.include_raw,
+        provider_options_name: &state.provider_options_name,
+        last_code_execution_tool_call_id: &mut state.last_code_execution_tool_call_id,
+        last_grounding_metadata: &mut state.last_grounding_metadata,
+        last_url_context_metadata: &mut state.last_url_context_metadata,
+    };
+    Ok(process_stream_chunk(&response, &mut stream_ctx, data))
 }
 
 /// Mutable state passed to `process_stream_chunk` on every SSE event.

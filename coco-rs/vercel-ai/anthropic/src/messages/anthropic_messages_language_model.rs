@@ -1801,11 +1801,9 @@ enum InProgressBlock {
 
 struct AnthropicStreamState {
     byte_stream: vercel_ai_provider_utils::ByteStream,
-    buffer: String,
+    decoder: vercel_ai_provider_utils::SseDecoder,
     pending: std::collections::VecDeque<LanguageModelV4StreamPart>,
     blocks: Vec<InProgressBlock>,
-    current_event_type: Option<String>,
-    current_data_lines: Vec<String>,
     usage: Option<super::anthropic_messages_api::AnthropicUsage>,
     raw_usage: HashMap<String, Value>,
     stop_reason: Option<String>,
@@ -1849,11 +1847,9 @@ impl AnthropicStreamState {
 
         Self {
             byte_stream,
-            buffer: String::new(),
+            decoder: vercel_ai_provider_utils::SseDecoder::new(),
             pending,
             blocks: Vec::new(),
-            current_event_type: None,
-            current_data_lines: Vec::new(),
             usage: None,
             raw_usage: HashMap::new(),
             stop_reason: None,
@@ -1882,57 +1878,28 @@ impl AnthropicStreamState {
 
         match self.byte_stream.next().await {
             Some(Ok(bytes)) => {
-                let text = String::from_utf8_lossy(&bytes);
-                self.buffer.push_str(&text);
-                self.process_buffer();
+                self.decoder
+                    .push(&bytes)
+                    .map_err(|error| AISdkError::new(format!("SSE framing error: {error}")))?;
+                while let Some(event) = self
+                    .decoder
+                    .next_event()
+                    .map_err(|error| AISdkError::new(format!("SSE framing error: {error}")))?
+                {
+                    self.process_sse_event(event.event.as_deref(), &event.data);
+                }
                 Ok(true)
             }
             Some(Err(e)) => Err(AISdkError::new(format!("Stream read error: {e}"))),
             None => {
-                // Flush any remaining buffered data lines
-                if !self.current_data_lines.is_empty() {
-                    let data = self.current_data_lines.join("\n");
-                    self.current_data_lines.clear();
-                    let event_type = self.current_event_type.take();
-                    self.process_sse_event(event_type.as_deref(), &data);
+                if let Some(event) = self
+                    .decoder
+                    .finish()
+                    .map_err(|error| AISdkError::new(format!("SSE framing error: {error}")))?
+                {
+                    self.process_sse_event(event.event.as_deref(), &event.data);
                 }
                 Ok(false)
-            }
-        }
-    }
-
-    /// Parse SSE lines. Supports multi-line `data:` fields per SSE spec.
-    fn process_buffer(&mut self) {
-        while let Some(line_end) = self.buffer.find('\n') {
-            let line = self.buffer[..line_end].trim_end_matches('\r').to_string();
-            self.buffer = self.buffer[line_end + 1..].to_string();
-
-            if line.is_empty() {
-                // Empty line = event dispatch per SSE spec
-                if !self.current_data_lines.is_empty() {
-                    let data = self.current_data_lines.join("\n");
-                    self.current_data_lines.clear();
-                    let event_type = self.current_event_type.take();
-                    self.process_sse_event(event_type.as_deref(), &data);
-                }
-                continue;
-            }
-
-            if let Some(event_type) = line
-                .strip_prefix("event: ")
-                .or_else(|| line.strip_prefix("event:"))
-            {
-                // SSE spec: strip exactly one leading space (not all whitespace)
-                let event_type = event_type.strip_prefix(' ').unwrap_or(event_type);
-                self.current_event_type = Some(event_type.to_string());
-                continue;
-            }
-
-            if let Some(data) = line
-                .strip_prefix("data: ")
-                .or_else(|| line.strip_prefix("data:"))
-            {
-                self.current_data_lines.push(data.to_string());
             }
         }
     }

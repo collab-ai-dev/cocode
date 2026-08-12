@@ -23,8 +23,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::BufRead;
 use std::io::BufReader;
-use std::io::BufWriter;
-use std::io::Write;
 use std::path::Path;
 
 /// Conversation loaded from transcript for session resume.
@@ -92,7 +90,8 @@ pub fn load_conversation_for_resume(
 }
 
 pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<SessionResumeState> {
-    if !transcript_path.exists() {
+    let segments = crate::storage::transcript_segment_paths(transcript_path)?;
+    if segments.is_empty() {
         return Err(crate::SessionError::TranscriptNotFound {
             path: transcript_path.to_path_buf(),
         });
@@ -103,41 +102,49 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
     let mut plan_slug: Option<String> = None;
     let mut has_sidechain = false;
 
-    let file = std::fs::File::open(transcript_path)?;
-    let reader = std::io::BufReader::new(file);
-    for line in reader.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
+    for (_, segment) in segments {
+        let metadata = std::fs::metadata(&segment)?;
+        if metadata.len() > crate::storage::MAX_TRANSCRIPT_SEGMENT_BYTES {
+            return Err(crate::SessionError::generic(format!(
+                "transcript segment too large: {}",
+                segment.display()
+            )));
         }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
-        let entry_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if !is_transcript_message_type(entry_type) {
-            if let Ok(meta) = serde_json::from_value::<MetadataEntry>(value) {
-                metadata_entries.push(Entry::Metadata(meta));
+        let reader = std::io::BufReader::new(std::fs::File::open(segment)?);
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
             }
-            continue;
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            let entry_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if !is_transcript_message_type(entry_type) {
+                if let Ok(meta) = serde_json::from_value::<MetadataEntry>(value) {
+                    metadata_entries.push(Entry::Metadata(meta));
+                }
+                continue;
+            }
+            if value
+                .get("is_sidechain")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
+                has_sidechain = true;
+                continue;
+            }
+            if plan_slug.is_none()
+                && let Some(slug) = value.get("slug").and_then(|v| v.as_str())
+                && !slug.is_empty()
+            {
+                plan_slug = Some(slug.to_string());
+            }
+            let Ok(te) = serde_json::from_value::<TranscriptEntry>(value) else {
+                continue;
+            };
+            entries.push(te);
         }
-        if value
-            .get("is_sidechain")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
-        {
-            has_sidechain = true;
-            continue;
-        }
-        if plan_slug.is_none()
-            && let Some(slug) = value.get("slug").and_then(|v| v.as_str())
-            && !slug.is_empty()
-        {
-            plan_slug = Some(slug.to_string());
-        }
-        let Ok(te) = serde_json::from_value::<TranscriptEntry>(value) else {
-            continue;
-        };
-        entries.push(te);
     }
     // A compact_boundary entry keeps every pre-boundary message in the
     // `messages` map and only resets marble-origami state; the boundary
@@ -624,18 +631,34 @@ fn relink_live_preserved_segment(
 
 /// Check if a session can be resumed (transcript exists and is valid).
 pub fn can_resume_session(transcript_path: &Path) -> bool {
-    let Ok(file) = std::fs::File::open(transcript_path) else {
+    let Ok(segments) = crate::storage::transcript_segment_paths(transcript_path) else {
         return false;
     };
-    for line in BufReader::new(file).lines() {
-        let Ok(line) = line else {
+    if segments.is_empty() {
+        return false;
+    }
+
+    let mut has_valid_entry = false;
+    for (_, segment) in segments {
+        let Ok(metadata) = std::fs::metadata(&segment) else {
             return false;
         };
-        if !line.trim().is_empty() && serde_json::from_str::<serde_json::Value>(&line).is_ok() {
-            return true;
+        if metadata.len() > crate::storage::MAX_TRANSCRIPT_SEGMENT_BYTES {
+            return false;
+        }
+        let Ok(file) = std::fs::File::open(segment) else {
+            return false;
+        };
+        for line in BufReader::new(file).lines() {
+            let Ok(line) = line else {
+                return false;
+            };
+            if !line.trim().is_empty() && serde_json::from_str::<serde_json::Value>(&line).is_ok() {
+                has_valid_entry = true;
+            }
         }
     }
-    false
+    has_valid_entry
 }
 
 /// Fork a conversation — copy the transcript into a new session file,
@@ -661,53 +684,86 @@ pub fn fork_conversation(
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent)?;
-    // Transcript appends take an exclusive lock on this file. A shared lock
-    // gives the fork one complete point-in-time snapshot without attempting to
-    // reacquire the runtime's session-ownership lease.
+
+    // Every segmented append coordinates through an exclusive lock on the
+    // stable base file. Holding its shared lock makes discovery plus copying
+    // one point-in-time snapshot without reacquiring the runtime's session
+    // ownership lease.
     let source_file = std::fs::File::open(source_path)?;
     fs2::FileExt::lock_shared(&source_file)?;
-    let mut reader = BufReader::new(source_file);
-    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-    {
-        let mut writer = BufWriter::new(temp.as_file_mut());
-        let mut line = Vec::new();
-        while reader.read_until(b'\n', &mut line)? != 0 {
-            while line
-                .last()
-                .is_some_and(|byte| matches!(byte, b'\r' | b'\n'))
-            {
-                line.pop();
-            }
-            if line.iter().all(u8::is_ascii_whitespace) {
-                line.clear();
-                continue;
-            }
-            match serde_json::from_slice::<serde_json::Value>(&line) {
-                Ok(mut value) => {
-                    if let Some(obj) = value.as_object_mut() {
-                        if obj.contains_key("session_id") {
+
+    let segments = crate::storage::transcript_segment_paths(source_path)?;
+    if segments.is_empty() {
+        return Err(crate::SessionError::TranscriptNotFound {
+            path: source_path.to_path_buf(),
+        });
+    }
+    if !crate::storage::transcript_segment_paths(dest_path)?.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "fork destination transcript already exists",
+        )
+        .into());
+    }
+
+    // Atomically claim the destination base so concurrent forks cannot append
+    // into each other. On any later failure, remove every segment we created.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dest_path)?;
+    const FORK_WRITE_BATCH_BYTES: usize = 4 * 1024 * 1024;
+    let result = (|| {
+        let mut output = Vec::with_capacity(FORK_WRITE_BATCH_BYTES);
+        for (_, segment) in segments {
+            let mut reader = BufReader::new(std::fs::File::open(segment)?);
+            let mut line = Vec::new();
+            while reader.read_until(b'\n', &mut line)? != 0 {
+                while line
+                    .last()
+                    .is_some_and(|byte| matches!(byte, b'\r' | b'\n'))
+                {
+                    line.pop();
+                }
+                if line.iter().all(u8::is_ascii_whitespace) {
+                    line.clear();
+                    continue;
+                }
+                let transformed = match serde_json::from_slice::<serde_json::Value>(&line) {
+                    Ok(mut value) => {
+                        if let Some(obj) = value.as_object_mut() {
+                            if obj.contains_key("session_id") {
+                                obj.insert(
+                                    "session_id".to_string(),
+                                    serde_json::Value::String(dest_session_id.to_string()),
+                                );
+                            }
                             obj.insert(
-                                "session_id".to_string(),
-                                serde_json::Value::String(dest_session_id.to_string()),
+                                "cwd".to_string(),
+                                serde_json::Value::String(dest_cwd.display().to_string()),
                             );
                         }
-                        obj.insert(
-                            "cwd".to_string(),
-                            serde_json::Value::String(dest_cwd.display().to_string()),
-                        );
+                        serde_json::to_vec(&value)?
                     }
-                    serde_json::to_writer(&mut writer, &value)?;
+                    Err(_) => std::mem::take(&mut line),
+                };
+                if !output.is_empty()
+                    && output.len().saturating_add(transformed.len() + 1) > FORK_WRITE_BATCH_BYTES
+                {
+                    crate::storage::append_jsonl_payload(dest_path, &output)?;
+                    output.clear();
                 }
-                Err(_) => writer.write_all(&line)?,
+                output.extend_from_slice(&transformed);
+                output.push(b'\n');
+                line.clear();
             }
-            writer.write_all(b"\n")?;
-            line.clear();
         }
-        writer.flush()?;
+        crate::storage::append_jsonl_payload(dest_path, &output)
+    })();
+    if result.is_err() {
+        let _ = crate::storage::remove_transcript_journal(dest_path);
     }
-    temp.as_file().sync_all()?;
-    temp.persist_noclobber(dest_path)
-        .map_err(|error| error.error)?;
+    result?;
     Ok(())
 }
 

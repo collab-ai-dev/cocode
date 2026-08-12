@@ -120,7 +120,7 @@ impl QueryEngine {
                 } else {
                     TurnContinuation::Continuing
                 };
-            let terminal = self
+            let finalization = self
                 .finalize_turn_post_tools(
                     &mut *history,
                     event_tx,
@@ -131,6 +131,26 @@ impl QueryEngine {
                     tool_batch_ran_sleep(tool_calls),
                 )
                 .await;
+            let terminal = finalization.terminal;
+            if let Some(error) = finalization.persistence_error {
+                return ToolExecutionBranch::Return {
+                    result: Box::new(mark_query_failed(
+                        make_query_result(
+                            consts,
+                            &*acc,
+                            &*turn_state,
+                            response_text,
+                            /*cancelled*/ false,
+                            /*budget_exhausted*/ false,
+                            Some("transcript_persistence_failed".into()),
+                            history.to_vec(),
+                            history.snapshot(),
+                        ),
+                        error,
+                    )),
+                    terminal,
+                };
+            }
             if let Some(ref c) = streaming_ctx {
                 self.drain_dynamic_skill_triggers(c, &mut *history, event_tx)
                     .await;
@@ -323,7 +343,7 @@ impl QueryEngine {
         } else {
             TurnContinuation::Terminal
         };
-        let terminal = self
+        let finalization = self
             .finalize_turn_post_tools(
                 &mut *history,
                 event_tx,
@@ -334,6 +354,26 @@ impl QueryEngine {
                 tool_batch_ran_sleep(tool_calls),
             )
             .await;
+        let terminal = finalization.terminal;
+        if let Some(error) = finalization.persistence_error {
+            return ToolExecutionBranch::Return {
+                result: Box::new(mark_query_failed(
+                    make_query_result(
+                        consts,
+                        &*acc,
+                        &*turn_state,
+                        response_text,
+                        /*cancelled*/ false,
+                        /*budget_exhausted*/ false,
+                        Some("transcript_persistence_failed".into()),
+                        history.to_vec(),
+                        history.snapshot(),
+                    ),
+                    error,
+                )),
+                terminal,
+            };
+        }
         self.drain_dynamic_skill_triggers(&ctx, &mut *history, event_tx)
             .await;
         if tool_run_outcome.permission_aborted {

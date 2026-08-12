@@ -119,6 +119,7 @@ pub enum ResponseOutputItem {
     #[serde(rename = "image_generation_call")]
     ImageGenerationCall {
         id: Option<String>,
+        status: Option<String>,
         result: Option<String>,
     },
     #[serde(rename = "mcp_call")]

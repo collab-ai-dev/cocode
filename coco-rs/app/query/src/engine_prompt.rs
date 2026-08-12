@@ -85,7 +85,10 @@ impl QueryEngine {
     /// history. The snapshot is shared (via `Arc`) with every per-turn
     /// `ToolUseContext.messages` so tools observe the same view the
     /// model just received.
-    pub(crate) async fn build_prompt(&self, history: &MessageHistory) -> BuiltPrompt {
+    pub(crate) async fn build_prompt(
+        &self,
+        history: &MessageHistory,
+    ) -> Result<BuiltPrompt, crate::assistant_payload::AssistantPayloadError> {
         self.build_prompt_with_recovery(
             history,
             &crate::engine_loop_state::RecoveryWorkingContext::default(),
@@ -97,7 +100,7 @@ impl QueryEngine {
         &self,
         history: &MessageHistory,
         recovery_context: &crate::engine_loop_state::RecoveryWorkingContext,
-    ) -> BuiltPrompt {
+    ) -> Result<BuiltPrompt, crate::assistant_payload::AssistantPayloadError> {
         let mut prompt = Vec::new();
 
         // System prompt assembly:
@@ -170,12 +173,19 @@ impl QueryEngine {
         // extra materialization at this seam.
         let normalized = coco_messages::normalize_messages_for_api(&api_messages);
         prompt.extend(normalized);
+        let artifact_root = self.transcript_store.as_ref().and_then(|store| {
+            self.transcript_session_id
+                .as_ref()
+                .and_then(|session_id| store.session_artifact_dir(session_id.as_str()))
+        });
+        let prompt =
+            crate::assistant_payload::rehydrate_assistant_payloads(prompt, artifact_root).await?;
 
-        BuiltPrompt {
+        Ok(BuiltPrompt {
             prompt,
             prompt_context,
             messages_snapshot: Arc::new(messages_for_api),
-        }
+        })
     }
 
     fn record_context_epoch_if_changed(&self, prompt_context: &coco_context::PromptContext) {

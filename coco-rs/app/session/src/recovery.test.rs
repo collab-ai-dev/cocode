@@ -8,6 +8,20 @@ fn test_can_resume_nonexistent() {
 }
 
 #[test]
+fn can_resume_rejects_a_journal_with_any_oversized_segment() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path().join("session.jsonl");
+    std::fs::write(&base, b"{}\n").expect("base segment");
+    let rotated = dir.path().join("session.jsonl.segment-000001");
+    std::fs::File::create(&rotated)
+        .expect("rotated segment")
+        .set_len(crate::storage::MAX_TRANSCRIPT_SEGMENT_BYTES + 1)
+        .expect("oversized sparse segment");
+
+    assert!(!can_resume_session(&base));
+}
+
+#[test]
 fn test_fork_conversation_relabels_session_id() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("source.jsonl");

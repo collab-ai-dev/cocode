@@ -721,7 +721,9 @@ pub struct ModelRuntimeRegistry {
     /// Serializes registry-state publication. Client construction happens
     /// outside this lock; generation checks reject stale builds.
     mutation_lock: std::sync::Mutex<()>,
-    state_generation: AtomicU64,
+    /// Advances only when inputs to client construction change. Lazy cache
+    /// publication is not configuration and must not invalidate other builds.
+    config_epoch: AtomicU64,
     runtime_config: std::sync::RwLock<Option<Arc<RuntimeConfig>>>,
     resolver: Option<Arc<dyn ProviderCredentialResolver>>,
     /// Session-scoped header-template variables (`${SESSION_ID}`, …), shared
@@ -859,7 +861,7 @@ impl ModelRuntimeRegistry {
         let (event_tx, _) = tokio::sync::broadcast::channel(128);
         Ok(Self {
             mutation_lock: std::sync::Mutex::new(()),
-            state_generation: AtomicU64::new(0),
+            config_epoch: AtomicU64::new(0),
             runtime_config: std::sync::RwLock::new(Some(runtime_config)),
             resolver,
             header_vars: std::sync::RwLock::new(header_vars),
@@ -883,7 +885,7 @@ impl ModelRuntimeRegistry {
         let (event_tx, _) = tokio::sync::broadcast::channel(128);
         Self {
             mutation_lock: std::sync::Mutex::new(()),
-            state_generation: AtomicU64::new(0),
+            config_epoch: AtomicU64::new(0),
             runtime_config: std::sync::RwLock::new(None),
             resolver: None,
             header_vars: std::sync::RwLock::new(Arc::new(HeaderVars::empty())),
@@ -1165,7 +1167,7 @@ impl ModelRuntimeRegistry {
         };
         let _build_guard = mutex_lock(&build_lock);
         loop {
-            let generation = self.state_generation.load(Ordering::Acquire);
+            let config_epoch = self.config_epoch.load(Ordering::Acquire);
             let (cfg, primary, header_vars) = {
                 let _mutation = mutex_lock(&self.mutation_lock);
                 if let Some(runtime) = rw_read(&self.role_runtimes).get(&role) {
@@ -1205,7 +1207,7 @@ impl ModelRuntimeRegistry {
                 Some(header_vars.as_ref()),
             )?));
             let _mutation = mutex_lock(&self.mutation_lock);
-            if self.state_generation.load(Ordering::Acquire) != generation {
+            if self.config_epoch.load(Ordering::Acquire) != config_epoch {
                 continue;
             }
             let mut runtimes = rw_write(&self.role_runtimes);
@@ -1213,7 +1215,6 @@ impl ModelRuntimeRegistry {
                 return Ok(existing.clone());
             }
             runtimes.insert(role, runtime.clone());
-            self.state_generation.fetch_add(1, Ordering::Release);
             return Ok(runtime);
         }
     }
@@ -1231,7 +1232,7 @@ impl ModelRuntimeRegistry {
         };
         let _build_guard = mutex_lock(&build_lock);
         loop {
-            let generation = self.state_generation.load(Ordering::Acquire);
+            let config_epoch = self.config_epoch.load(Ordering::Acquire);
             let (cfg, header_vars) = {
                 let _mutation = mutex_lock(&self.mutation_lock);
                 if let Some(runtime) = rw_read(&self.explicit_runtimes).get(&selection) {
@@ -1261,7 +1262,7 @@ impl ModelRuntimeRegistry {
             )?;
             let runtime = Arc::new(std::sync::Mutex::new(ModelRuntime::new(client, Vec::new())));
             let _mutation = mutex_lock(&self.mutation_lock);
-            if self.state_generation.load(Ordering::Acquire) != generation {
+            if self.config_epoch.load(Ordering::Acquire) != config_epoch {
                 continue;
             }
             let mut runtimes = rw_write(&self.explicit_runtimes);
@@ -1269,7 +1270,6 @@ impl ModelRuntimeRegistry {
                 return Ok(existing.clone());
             }
             runtimes.insert(selection, runtime.clone());
-            self.state_generation.fetch_add(1, Ordering::Release);
             return Ok(runtime);
         }
     }
@@ -1383,7 +1383,7 @@ impl ModelRuntimeRegistry {
             effort,
         };
         loop {
-            let generation = self.state_generation.load(Ordering::Acquire);
+            let config_epoch = self.config_epoch.load(Ordering::Acquire);
             let (cfg, header_vars) = {
                 let _mutation = mutex_lock(&self.mutation_lock);
                 let cfg = rw_read(&self.runtime_config).clone().ok_or_else(|| {
@@ -1406,7 +1406,7 @@ impl ModelRuntimeRegistry {
                 Some(header_vars.as_ref()),
             )?;
             let _mutation = mutex_lock(&self.mutation_lock);
-            if self.state_generation.load(Ordering::Acquire) != generation {
+            if self.config_epoch.load(Ordering::Acquire) != config_epoch {
                 continue;
             }
             rw_write(&self.role_overrides).insert(role, slot);
@@ -1416,7 +1416,7 @@ impl ModelRuntimeRegistry {
                 old.abort();
             }
             rw_write(&self.role_runtimes).insert(role, Arc::new(std::sync::Mutex::new(runtime)));
-            self.state_generation.fetch_add(1, Ordering::Release);
+            self.config_epoch.fetch_add(1, Ordering::Release);
             break;
         }
         let events = vec![ModelRuntimeEvent::RoleRebound {
@@ -1488,7 +1488,7 @@ impl ModelRuntimeRegistry {
                     task.abort();
                 }
             }
-            self.state_generation.fetch_add(1, Ordering::Release);
+            self.config_epoch.fetch_add(1, Ordering::Release);
             (cfg, explicit_keys)
         };
         match cfg {
@@ -1508,7 +1508,7 @@ impl ModelRuntimeRegistry {
         runtime_config: Arc<RuntimeConfig>,
     ) -> Result<(), InferenceError> {
         loop {
-            let generation = self.state_generation.load(Ordering::Acquire);
+            let config_epoch = self.config_epoch.load(Ordering::Acquire);
             let (overrides, explicit_keys, header_vars) = {
                 let _mutation = mutex_lock(&self.mutation_lock);
                 (
@@ -1556,7 +1556,7 @@ impl ModelRuntimeRegistry {
                 );
             }
             let _mutation = mutex_lock(&self.mutation_lock);
-            if self.state_generation.load(Ordering::Acquire) != generation {
+            if self.config_epoch.load(Ordering::Acquire) != config_epoch {
                 continue;
             }
             for (_, task) in mutex_lock(&self.recovery_tasks).drain() {
@@ -1565,7 +1565,7 @@ impl ModelRuntimeRegistry {
             *rw_write(&self.role_runtimes) = rebuilt;
             *rw_write(&self.runtime_config) = Some(runtime_config);
             *rw_write(&self.explicit_runtimes) = rebuilt_explicit;
-            self.state_generation.fetch_add(1, Ordering::Release);
+            self.config_epoch.fetch_add(1, Ordering::Release);
             return Ok(());
         }
     }

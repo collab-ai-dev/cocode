@@ -1420,6 +1420,129 @@ fn test_append_message_chain_write_failure_does_not_commit_seen_state() {
     assert_eq!(store.load_transcript_messages(sid).unwrap().len(), 1);
 }
 
+#[test]
+fn transcript_journal_loads_manually_rotated_segments_in_order() {
+    let (_dir, store, _project_dir) = test_store();
+    let sid = "segmented-load";
+    let first = MetadataEntry::Tag {
+        session_id: test_session_id(sid),
+        tag: "first".into(),
+    };
+    let second = MetadataEntry::Tag {
+        session_id: test_session_id(sid),
+        tag: "second".into(),
+    };
+    store.append_metadata(sid, &first).expect("base append");
+    let base = store.transcript_path(sid);
+    let segment = transcript_segment_path(&base, 1);
+    let mut encoded = serde_json::to_vec(&second).expect("serialize segment entry");
+    encoded.push(b'\n');
+    std::fs::write(&segment, encoded).expect("write rotated segment");
+
+    let tags: Vec<String> = store
+        .load_entries(sid)
+        .expect("load segmented journal")
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Entry::Metadata(MetadataEntry::Tag { tag, .. }) => Some(tag),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(tags, ["first", "second"]);
+    assert_eq!(
+        store.read_metadata(sid).expect("segmented metadata").tag,
+        Some("second".into())
+    );
+}
+
+#[test]
+fn transcript_append_rotates_instead_of_enforcing_a_lifetime_cap() {
+    let (_dir, store, _project_dir) = test_store();
+    let sid = "segmented-append";
+    store
+        .append_metadata(
+            sid,
+            &MetadataEntry::Tag {
+                session_id: test_session_id(sid),
+                tag: "first".into(),
+            },
+        )
+        .expect("base append");
+    let base = store.transcript_path(sid);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&base)
+        .expect("open base")
+        .set_len(MAX_TRANSCRIPT_SEGMENT_BYTES)
+        .expect("fill segment boundary");
+
+    store
+        .append_metadata(
+            sid,
+            &MetadataEntry::Tag {
+                session_id: test_session_id(sid),
+                tag: "second".into(),
+            },
+        )
+        .expect("append must rotate");
+
+    let segment = transcript_segment_path(&base, 1);
+    assert!(segment.is_file());
+    assert!(std::fs::read_to_string(segment).unwrap().contains("second"));
+}
+
+#[test]
+fn transcript_append_rejects_an_already_oversized_tail_segment() {
+    let (_dir, store, _project_dir) = test_store();
+    let sid = "oversized-segment";
+    store
+        .append_metadata(
+            sid,
+            &MetadataEntry::Tag {
+                session_id: test_session_id(sid),
+                tag: "first".into(),
+            },
+        )
+        .expect("base append");
+    let base = store.transcript_path(sid);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&base)
+        .expect("open base")
+        .set_len(MAX_TRANSCRIPT_SEGMENT_BYTES + 1)
+        .expect("oversize segment");
+
+    let error = store
+        .append_metadata(
+            sid,
+            &MetadataEntry::Tag {
+                session_id: test_session_id(sid),
+                tag: "second".into(),
+            },
+        )
+        .expect_err("corrupt tail must not be bypassed by rotation");
+
+    assert!(error.to_string().contains("segment too large"));
+    assert!(!transcript_segment_path(&base, 1).exists());
+}
+
+#[test]
+fn transcript_delete_removes_every_journal_segment() {
+    let (_dir, store, _project_dir) = test_store();
+    let sid = "segmented-delete";
+    let base = store.transcript_path(sid);
+    std::fs::create_dir_all(base.parent().unwrap()).unwrap();
+    std::fs::write(&base, b"{}\n").unwrap();
+    let second = transcript_segment_path(&base, 1);
+    std::fs::write(&second, b"{}\n").unwrap();
+
+    store.delete(sid).expect("delete journal");
+
+    assert!(!base.exists());
+    assert!(!second.exists());
+}
+
 struct PartialWriteThenError {
     bytes: Vec<u8>,
     cursor: u64,

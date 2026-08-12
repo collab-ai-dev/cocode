@@ -22,12 +22,11 @@ One line per domain — browse `lib.rs` for the full surface.
 
 ## SseDecoder
 
-UTF-8-safe byte→`data:`-line accumulator for OpenAI-wire streams. Buffers raw
-bytes and decodes only complete lines, so a multi-byte char split across a
-network chunk boundary is never corrupted. Shared by the `openai` /
-`openai-compatible` / `groq` / `xai` models (each keeps its own event state
-machine but pumps bytes through this one decoder). Distinct from the blocking
-`parse_json_event_stream` (a `std::io::Read` iterator used off the async path).
+Bounded UTF-8-safe byte→event decoder shared by every async SSE provider.
+It owns event framing (`event:`, multi-line `data:`, CRLF, comments, EOF) and
+rejects invalid UTF-8 or an oversized event before provider JSON decoding.
+Distinct from the blocking `parse_json_event_stream` (a `std::io::Read`
+iterator used off the async path).
 
 ## Conventions
 

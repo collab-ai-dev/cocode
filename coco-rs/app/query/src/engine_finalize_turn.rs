@@ -58,6 +58,11 @@ pub(crate) enum TurnContinuation {
     Terminal,
 }
 
+pub(crate) struct TurnFinalization {
+    pub(crate) terminal: Option<coco_event_types::TurnEndedParams>,
+    pub(crate) persistence_error: Option<coco_event_types::ErrorPayload>,
+}
+
 impl TurnContinuation {
     pub(crate) fn is_terminal(self) -> bool {
         matches!(self, TurnContinuation::Terminal)
@@ -442,7 +447,7 @@ impl QueryEngine {
         // `Later`-priority items (background task-completion notifications)
         // drain only after a Sleep; else the boundary drain caps at `Next`.
         sleep_ran: bool,
-    ) -> Option<coco_event_types::TurnEndedParams> {
+    ) -> TurnFinalization {
         // Periodic terminal-task eviction. Fires every turn regardless
         // of success / failure / cancellation outcome. Without a periodic
         // sweep `TaskManager`'s in-memory map grows monotonically over a

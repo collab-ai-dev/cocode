@@ -6,6 +6,10 @@ fn test_tool_result_new() {
         LanguageModelV4ToolResult::new("call-1", "get_weather", serde_json::json!({"temp": 20}));
     assert_eq!(result.tool_call_id, "call-1");
     assert_eq!(result.tool_name, "get_weather");
+    assert_eq!(
+        result.output,
+        crate::ToolResultContent::json(serde_json::json!({"temp": 20}))
+    );
     assert!(result.is_error.is_none());
     assert!(result.preliminary.is_none());
 }
@@ -50,4 +54,16 @@ fn test_tool_result_with_all_options_serialization() {
     assert!(json.contains(r#""isError":true"#));
     assert!(json.contains(r#""preliminary":false"#));
     assert!(json.contains(r#""dynamic":true"#));
+}
+
+#[test]
+fn test_tool_result_supports_typed_file_output() {
+    let output =
+        crate::ToolResultContent::content_parts(vec![crate::ToolResultContentPart::file_data(
+            "aW1hZ2U=",
+            "image/png",
+        )]);
+    let result = LanguageModelV4ToolResult::new("image-1", "image_generation", output.clone());
+
+    assert_eq!(result.output, output);
 }

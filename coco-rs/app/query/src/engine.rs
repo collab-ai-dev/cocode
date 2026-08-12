@@ -702,7 +702,7 @@ impl QueryEngine {
             self.consume_pending_plan_mode_clear_context(history, &event_tx, turn_state.turn)
                 .await;
 
-            let prepared_turn = self
+            let prepared_turn = match self
                 .enter_turn_and_prepare_request(
                     &consts,
                     &acc,
@@ -714,7 +714,23 @@ impl QueryEngine {
                     cycle_turn_id.clone(),
                     &turn_id,
                 )
-                .await;
+                .await
+            {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    let result = self
+                        .handle_assistant_payload_error_terminal(
+                            &consts,
+                            &acc,
+                            &turn_state,
+                            &error.to_string(),
+                            history,
+                            &event_tx,
+                        )
+                        .await;
+                    return (Ok(result), None);
+                }
+            };
             let crate::engine_turn_request::PreparedTurnRequest {
                 mut params,
                 active_snapshot,

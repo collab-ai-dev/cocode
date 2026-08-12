@@ -2,6 +2,7 @@
 //!
 //! Result of a tool call that has been executed by the provider.
 
+use crate::content::ToolResultContent;
 use crate::json_value::JSONValue;
 use crate::shared::ProviderMetadata;
 use serde::Deserialize;
@@ -15,8 +16,8 @@ pub struct LanguageModelV4ToolResult {
     pub tool_call_id: String,
     /// Name of the tool that generated this result.
     pub tool_name: String,
-    /// Result of the tool call. This is a JSON-serializable object.
-    pub result: JSONValue,
+    /// Typed result of the tool call.
+    pub output: ToolResultContent,
     /// Optional flag if the result is an error or an error message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
@@ -40,12 +41,12 @@ impl LanguageModelV4ToolResult {
     pub fn new(
         tool_call_id: impl Into<String>,
         tool_name: impl Into<String>,
-        result: JSONValue,
+        output: impl Into<ToolResultContent>,
     ) -> Self {
         Self {
             tool_call_id: tool_call_id.into(),
             tool_name: tool_name.into(),
-            result,
+            output: output.into(),
             is_error: None,
             preliminary: None,
             dynamic: None,
@@ -62,7 +63,7 @@ impl LanguageModelV4ToolResult {
         Self {
             tool_call_id: tool_call_id.into(),
             tool_name: tool_name.into(),
-            result: error,
+            output: ToolResultContent::error_json(error),
             is_error: Some(true),
             preliminary: None,
             dynamic: None,

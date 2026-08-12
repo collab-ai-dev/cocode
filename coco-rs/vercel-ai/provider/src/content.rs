@@ -456,6 +456,12 @@ impl From<&str> for ToolResultContent {
     }
 }
 
+impl From<JSONValue> for ToolResultContent {
+    fn from(value: JSONValue) -> Self {
+        Self::json(value)
+    }
+}
+
 /// A part of tool result content.
 ///
 /// Matches the `content` array items in `LanguageModelV4ToolResultOutput`

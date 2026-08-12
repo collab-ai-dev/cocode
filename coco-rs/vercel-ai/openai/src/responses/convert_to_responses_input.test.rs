@@ -669,3 +669,73 @@ fn replays_code_interpreter_call_with_outputs_as_one_native_item() {
     assert_eq!(items[0]["code"], "print(42)");
     assert_eq!(items[0]["outputs"][0]["logs"], "42");
 }
+
+#[test]
+fn replays_image_generation_as_one_native_item_with_exact_result_and_status() {
+    let mut call = ToolCallPart::new(
+        "image_1",
+        "image_generation",
+        serde_json::json!({"type": "image_generation"}),
+    )
+    .with_provider_executed(true);
+    call.provider_metadata =
+        crate::responses::provider_metadata::build_hosted_tool_provider_metadata(Some("completed"));
+    let result = ToolResultPart::new(
+        "image_1",
+        "image_generation",
+        ToolResultContent::content_parts(vec![ToolResultContentPart::file_data(
+            "aW1hZ2U=",
+            "image/png",
+        )]),
+    );
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![
+            AssistantContentPart::ToolCall(call),
+            AssistantContentPart::ToolResult(result),
+        ],
+        provider_options: None,
+    }];
+
+    let (items, warnings) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+
+    assert!(warnings.is_empty());
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["type"], "image_generation_call");
+    assert_eq!(items[0]["id"], "image_1");
+    assert_eq!(items[0]["status"], "completed");
+    assert_eq!(items[0]["result"], "aW1hZ2U=");
+}
+
+#[test]
+fn replays_file_search_with_exact_results_and_provider_status() {
+    let mut call = ToolCallPart::new(
+        "search_1",
+        "file_search",
+        serde_json::json!({"type": "file_search"}),
+    )
+    .with_provider_executed(true);
+    call.provider_metadata =
+        crate::responses::provider_metadata::build_hosted_tool_provider_metadata(Some("failed"));
+    let results = serde_json::json!([{"file_id": "file_1", "score": 0.75}]);
+    let result = ToolResultPart::new(
+        "search_1",
+        "file_search",
+        ToolResultContent::json(results.clone()),
+    );
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![
+            AssistantContentPart::ToolCall(call),
+            AssistantContentPart::ToolResult(result),
+        ],
+        provider_options: None,
+    }];
+
+    let (items, warnings) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+
+    assert!(warnings.is_empty());
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["type"], "file_search_call");
+    assert_eq!(items[0]["id"], "search_1");
+    assert_eq!(items[0]["status"], "failed");
+    assert_eq!(items[0]["results"], results);
+}

@@ -279,7 +279,7 @@ impl QueryEngine {
         turn_state: &LoopTurnState,
         message: &str,
         history: &mut MessageHistory,
-        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     ) -> QueryResult {
         warn!(
             error = message,
@@ -307,9 +307,9 @@ impl QueryEngine {
                 history.to_vec(),
                 history.snapshot(),
             ),
-            coco_types::ErrorPayload {
+            coco_event_types::ErrorPayload {
                 message: message.to_string(),
-                code: coco_types::ErrorCode::Provider,
+                code: coco_event_types::ErrorCode::Provider,
             },
         )
     }
@@ -406,7 +406,31 @@ impl QueryEngine {
             return NoToolCallsTerminal::ContinueLoop;
         }
 
-        self.flush_successful_turn_state(&mut *history).await;
+        if let Err(error) = self.flush_successful_turn_state(&mut *history).await {
+            let error = coco_event_types::ErrorPayload {
+                message: format!("failed to persist session transcript: {error}"),
+                code: coco_event_types::ErrorCode::Io,
+            };
+            warn!(message = %error.message, "turn durability barrier failed");
+            return NoToolCallsTerminal::Return {
+                result: Box::new(mark_query_failed(
+                    make_query_result(
+                        consts,
+                        acc,
+                        turn_state,
+                        response_text,
+                        /*cancelled*/ false,
+                        /*budget_exhausted*/ false,
+                        Some("transcript_persistence_failed".into()),
+                        history.to_vec(),
+                        history.snapshot(),
+                    ),
+                    error.clone(),
+                )),
+                terminal: cycle_turn_id
+                    .map(|id| coco_event_types::TurnEndedParams::failed(id, Some(usage), error)),
+            };
+        }
 
         // Goal runtime (§10.2, §10.3): at a user-started goal turn's natural stop,
         // run the completion coordinator + `FinishTurn` and record the transition
@@ -465,6 +489,7 @@ impl QueryEngine {
         if !matches!(
             stop_decision,
             crate::engine_stop_hooks::StopHookDecision::BlockedContinueLoop
+                | crate::engine_stop_hooks::StopHookDecision::PersistenceFailed { .. }
         ) {
             self.run_skill_review_finalize(history, event_tx).await;
         }
@@ -497,6 +522,27 @@ impl QueryEngine {
             }
             crate::engine_stop_hooks::StopHookDecision::BlockedContinueLoop => {
                 NoToolCallsTerminal::ContinueLoop
+            }
+            crate::engine_stop_hooks::StopHookDecision::PersistenceFailed { error } => {
+                NoToolCallsTerminal::Return {
+                    result: Box::new(mark_query_failed(
+                        make_query_result(
+                            consts,
+                            &*acc,
+                            &*turn_state,
+                            response_text,
+                            /*cancelled*/ false,
+                            /*budget_exhausted*/ false,
+                            Some("transcript_persistence_failed".into()),
+                            history.to_vec(),
+                            history.snapshot(),
+                        ),
+                        error.clone(),
+                    )),
+                    terminal: cycle_turn_id.map(|id| {
+                        coco_event_types::TurnEndedParams::failed(id, Some(usage), error)
+                    }),
+                }
             }
             crate::engine_stop_hooks::StopHookDecision::SkippedApiError { payload } => {
                 let stop_reason = payload
