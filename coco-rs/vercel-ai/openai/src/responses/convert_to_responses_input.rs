@@ -98,6 +98,7 @@ fn prompt_call_ids(prompt: &LanguageModelV4Prompt) -> impl Iterator<Item = &str>
             .flatten()
             .filter_map(|part| match part {
                 AssistantContentPart::ToolCall(call) => Some(call.tool_call_id.as_str()),
+                AssistantContentPart::ToolResult(result) => Some(result.tool_call_id.as_str()),
                 _ => None,
             });
         let tool = tool.into_iter().flatten().filter_map(|part| match part {
@@ -337,6 +338,15 @@ fn convert_assistant_parts(
 ) {
     // Collect text parts into a message, and emit tool calls as separate items
     let mut text_parts = Vec::new();
+    let provider_results: HashMap<&str, &vercel_ai_provider::ToolResultPart> = parts
+        .iter()
+        .filter_map(|part| match part {
+            AssistantContentPart::ToolResult(result) => {
+                Some((result.tool_call_id.as_str(), result))
+            }
+            _ => None,
+        })
+        .collect();
     let flush_text = |text_parts: &mut Vec<Value>, items: &mut Vec<Value>| {
         if !text_parts.is_empty() {
             items.push(json!({
@@ -355,8 +365,13 @@ fn convert_assistant_parts(
             AssistantContentPart::ToolCall(tc) => {
                 flush_text(&mut text_parts, items);
 
-                // Skip provider-executed tool calls (they are already in the context)
                 if tc.provider_executed == Some(true) {
+                    emit_provider_executed_tool_call(
+                        tc,
+                        provider_results.get(tc.tool_call_id.as_str()).copied(),
+                        items,
+                        call_ids,
+                    );
                     continue;
                 }
 
@@ -481,15 +496,244 @@ fn convert_assistant_parts(
                 }
                 items.push(Value::Object(item));
             }
+            AssistantContentPart::ToolApprovalRequest(request) => {
+                flush_text(&mut text_parts, items);
+                let (Some(name), Some(server_label), Some(input)) = (
+                    request.tool_name.as_deref(),
+                    request.context.as_deref(),
+                    request.input.as_ref(),
+                ) else {
+                    continue;
+                };
+                items.push(json!({
+                    "type": "mcp_approval_request",
+                    "id": request.approval_id,
+                    "arguments": json_argument_string(input),
+                    "name": name,
+                    "server_label": server_label,
+                }));
+            }
+            AssistantContentPart::ToolResult(_) => {
+                // Provider results are emitted with their matching call so
+                // native output items retain the shape expected by Responses.
+            }
             _ => {
-                // Source, File, ToolResult, ToolApprovalRequest, other Custom
-                // kinds — skip
+                // Source, File, and other Custom kinds are not OpenAI input
+                // items and are intentionally transcript-only.
             }
         }
     }
 
     // Flush remaining text
     flush_text(&mut text_parts, items);
+}
+
+fn emit_provider_executed_tool_call(
+    call: &vercel_ai_provider::ToolCallPart,
+    result: Option<&vercel_ai_provider::ToolResultPart>,
+    items: &mut Vec<Value>,
+    call_ids: &ResponsesCallIdProjector,
+) {
+    let call_id = call_ids.project(&call.tool_call_id);
+    let result_value = result.map(|result| raw_tool_result_value(&result.output));
+    match call.tool_name.as_str() {
+        "web_search" => items.push(json!({
+            "type": "web_search_call",
+            "id": call_id,
+            "status": "completed",
+        })),
+        "file_search" => {
+            let mut item = json!({
+                "type": "file_search_call",
+                "id": call_id,
+                "status": "completed",
+            });
+            if let Some(value) = result_value {
+                item["results"] = value;
+            }
+            items.push(item);
+        }
+        "code_interpreter" => {
+            let mut item = json!({
+                "type": "code_interpreter_call",
+                "id": call_id,
+                "status": "completed",
+                "code": call.input.get("code").cloned().unwrap_or(Value::Null),
+            });
+            if let Some(value) = result_value {
+                item["outputs"] = value;
+            }
+            items.push(item);
+        }
+        "image_generation" => items.push(json!({
+            "type": "image_generation_call",
+            "id": call_id,
+            "status": if result.is_some_and(|result| result.is_error) { "failed" } else { "completed" },
+            "result": result_value,
+        })),
+        "shell" => {
+            let item_id = provider_metadata_string(call.provider_metadata.as_ref(), "itemId")
+                .unwrap_or(call_id);
+            items.push(json!({
+                "type": "shell_call",
+                "id": item_id,
+                "call_id": call_id,
+                "status": "completed",
+                "action": call.input,
+            }));
+            if let Some(output) = result_value {
+                items.push(json!({
+                    "type": "shell_call_output",
+                    "call_id": call_id,
+                    "status": "completed",
+                    "output": output,
+                }));
+            }
+        }
+        "local_shell" => {
+            let item_id = provider_metadata_string(call.provider_metadata.as_ref(), "itemId")
+                .unwrap_or(call_id);
+            items.push(json!({
+                "type": "local_shell_call",
+                "id": item_id,
+                "call_id": call_id,
+                "status": "completed",
+                "action": call.input,
+            }));
+            if let Some(output) = result_value {
+                items.push(json!({
+                    "type": "local_shell_call_output",
+                    "id": call_id,
+                    "status": "completed",
+                    "output": output,
+                }));
+            }
+        }
+        "apply_patch" => {
+            let item_id = provider_metadata_string(call.provider_metadata.as_ref(), "itemId")
+                .unwrap_or(call_id);
+            items.push(json!({
+                "type": "apply_patch_call",
+                "id": item_id,
+                "call_id": call_id,
+                "status": "completed",
+                "operation": call.input,
+            }));
+            if let Some(output) = result_value {
+                items.push(json!({
+                    "type": "apply_patch_call_output",
+                    "call_id": call_id,
+                    "status": if result.is_some_and(|result| result.is_error) { "failed" } else { "completed" },
+                    "output": value_to_string(&output),
+                }));
+            }
+        }
+        "tool_search" => {
+            let item_id = provider_metadata_string(call.provider_metadata.as_ref(), "itemId");
+            let mut item = json!({
+                "type": "tool_search_call",
+                "call_id": call_id,
+                "execution": "server",
+                "status": "completed",
+                "arguments": call.input,
+            });
+            if let Some(item_id) = item_id {
+                item["id"] = Value::String(item_id.to_string());
+            }
+            items.push(item);
+            if let Some(result) = result {
+                items.push(json!({
+                    "type": "tool_search_output",
+                    "call_id": call_id,
+                    "execution": "server",
+                    "status": "completed",
+                    "tools": tool_search_output_tools(&result.output),
+                }));
+            }
+        }
+        _ => {
+            if let Some(server_label) =
+                provider_metadata_string(call.provider_metadata.as_ref(), "serverLabel")
+            {
+                let mut item = json!({
+                    "type": "mcp_call",
+                    "id": call_id,
+                    "name": call.tool_name,
+                    "arguments": json_argument_string(&call.input),
+                    "server_label": server_label,
+                    "status": if result.is_some_and(|result| result.is_error) { "failed" } else { "completed" },
+                });
+                if let Some(approval_id) = provider_metadata_string(
+                    call.provider_metadata.as_ref(),
+                    "approvalRequestId",
+                ) {
+                    item["approval_request_id"] = Value::String(approval_id.to_string());
+                }
+                if let Some(result) = result {
+                    let field = if result.is_error { "error" } else { "output" };
+                    item[field] =
+                        Value::String(value_to_string(&raw_tool_result_value(&result.output)));
+                }
+                items.push(item);
+            } else {
+                items.push(json!({
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": call.tool_name,
+                    "arguments": json_argument_string(&call.input),
+                }));
+                if let Some(result) = result {
+                    items.push(json!({
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": serialize_tool_result_for_responses(&result.output),
+                    }));
+                }
+            }
+        }
+    }
+}
+
+fn provider_metadata_string<'a>(
+    metadata: Option<&'a vercel_ai_provider::ProviderMetadata>,
+    key: &str,
+) -> Option<&'a str> {
+    let values = &metadata?.0;
+    values
+        .get(key)
+        .or_else(|| values.get("openai").and_then(|value| value.get(key)))
+        .and_then(Value::as_str)
+}
+
+fn json_argument_string(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        _ => serde_json::to_string(value).unwrap_or_default(),
+    }
+}
+
+fn raw_tool_result_value(content: &ToolResultContent) -> Value {
+    match content {
+        ToolResultContent::Text { value, .. } | ToolResultContent::ErrorText { value, .. } => {
+            Value::String(value.clone())
+        }
+        ToolResultContent::Json { value, .. } | ToolResultContent::ErrorJson { value, .. } => {
+            value.clone()
+        }
+        ToolResultContent::ExecutionDenied { reason, .. } => Value::String(
+            reason
+                .clone()
+                .unwrap_or_else(|| "Tool execution denied.".into()),
+        ),
+        ToolResultContent::Content { .. } => serialize_tool_result_for_responses(content),
+    }
+}
+
+fn value_to_string(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        _ => serde_json::to_string(value).unwrap_or_default(),
+    }
 }
 
 fn convert_tool_parts(
@@ -576,11 +820,15 @@ fn convert_tool_parts(
                 }));
             }
             ToolContentPart::ToolApprovalResponse(apr) => {
-                items.push(json!({
+                let mut item = json!({
                     "type": "mcp_approval_response",
                     "approval_request_id": apr.approval_id,
                     "approve": apr.approved,
-                }));
+                });
+                if let Some(reason) = &apr.reason {
+                    item["reason"] = Value::String(reason.clone());
+                }
+                items.push(item);
             }
         }
     }

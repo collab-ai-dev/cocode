@@ -1586,6 +1586,60 @@ fn test_validate_images_for_api_allows_small_image_and_non_image_files() {
     assert!(validate_images_for_api(&prompt, 10).is_ok());
 }
 
+#[test]
+fn test_validate_images_for_api_rejects_oversized_assistant_reasoning_image() {
+    let prompt = vec![LlmMessage::Assistant {
+        content: vec![AssistantContent::ReasoningFile(
+            coco_llm_types::ReasoningFilePart::from_base64("a".repeat(11), "image/png"),
+        )],
+        provider_options: None,
+    }];
+    let error = validate_images_for_api(&prompt, 10)
+        .expect_err("assistant-generated images use the same wire limit");
+    assert_eq!(error.base64_len, 11);
+}
+
+#[test]
+fn assistant_coco_media_reference_projects_to_bounded_text_for_api() {
+    let assistant = Message::Assistant(AssistantMessage {
+        message: LlmMessage::Assistant {
+            content: vec![AssistantContent::File(coco_llm_types::FilePart::new(
+                coco_llm_types::SharedV4FileData::reference(std::collections::HashMap::from([(
+                    "coco".into(),
+                    "assistant-media/generated.png".into(),
+                )])),
+                "image/png",
+            ))],
+            provider_options: None,
+        },
+        uuid: Uuid::new_v4(),
+        model: "test".into(),
+        stop_reason: None,
+        usage: None,
+        cost_usd: None,
+        request_id: None,
+        api_error: None,
+    });
+    let normalized = normalize_messages_for_api(&arc_vec(&[user_msg("go"), assistant]));
+    let projected = normalized
+        .iter()
+        .filter_map(|message| match message {
+            LlmMessage::Assistant { content, .. } => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .find_map(|part| match part {
+            AssistantContent::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        });
+    assert_eq!(
+        projected,
+        Some(
+            "[generated media stored as assistant-media/generated.png; binary content omitted from model context]"
+        )
+    );
+}
+
 // ── Cross-message tool_call_id dedup ────────────────────────────────
 
 use coco_llm_types::ToolContentPart;
@@ -1818,4 +1872,47 @@ fn duplicate_tool_call_ids_within_one_assistant_message_are_made_unique() {
     let ids = wire_tool_result_ids(&result);
     assert!(ids.contains(&"dup".to_string()), "got {ids:?}");
     assert!(ids.contains(&"dup_d2".to_string()), "got {ids:?}");
+}
+
+#[test]
+fn duplicate_tool_call_rename_updates_its_provider_approval_request() {
+    let second = Message::Assistant(AssistantMessage {
+        message: LlmMessage::Assistant {
+            content: vec![
+                AssistantContent::ToolCall(coco_llm_types::ToolCallPart {
+                    tool_call_id: "call_1".into(),
+                    tool_name: "remote_search".into(),
+                    input: serde_json::json!({}),
+                    provider_executed: Some(true),
+                    invalid: false,
+                    invalid_reason: None,
+                    provider_metadata: None,
+                }),
+                AssistantContent::ToolApprovalRequest(
+                    coco_llm_types::ToolApprovalRequestPart::new("approval-2", "call_1"),
+                ),
+            ],
+            provider_options: None,
+        },
+        uuid: Uuid::new_v4(),
+        model: "test".into(),
+        stop_reason: Some(StopReason::ToolUse),
+        usage: None,
+        cost_usd: None,
+        request_id: None,
+        api_error: None,
+    });
+    let result = normalize_messages_for_api(&arc_vec(&[asst_tool_call_msg("call_1"), second]));
+    let approval_id = result
+        .iter()
+        .filter_map(|message| match message {
+            LlmMessage::Assistant { content, .. } => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .find_map(|part| match part {
+            AssistantContent::ToolApprovalRequest(request) => Some(request.tool_call_id.as_str()),
+            _ => None,
+        });
+    assert_eq!(approval_id, Some("call_1_d2"));
 }

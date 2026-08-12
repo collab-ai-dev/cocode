@@ -230,7 +230,7 @@ fn make_assistant_with_media() -> Arc<Message> {
                 "image/png",
             )),
             AssistantContentPart::ReasoningFile(coco_llm_types::ReasoningFilePart::new(
-                coco_llm_types::LanguageModelV4FileData::bytes(vec![0u8; 64]),
+                coco_llm_types::SharedV4FileData::data_bytes(vec![0u8; 64]),
                 "application/pdf",
             )),
         ]),

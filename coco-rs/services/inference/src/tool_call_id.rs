@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::fmt;
 
 use vercel_ai_provider::LanguageModelV4StreamPart;
@@ -15,17 +16,17 @@ use vercel_ai_provider::LanguageModelV4StreamPart;
 /// N times) are outside this seam and are resolved at the pre-API chokepoint by
 /// `coco_messages::normalize` — see that crate's `DedupToolCallIds` pass.
 ///
-/// `ToolResult` and `ToolApprovalRequest` parts are deliberately **not**
-/// rewritten: both are dropped downstream (`stream.rs` keeps neither in the
-/// turn snapshot, and `app/query` does not reconstruct approval requests into
-/// assistant history), so binding them to a renamed call would be bookkeeping
-/// nobody reads. If either is ever round-tripped into assistant content, they
-/// need a FIFO binding per reused raw id — results preferring an unfinished
-/// call with the same tool name, preliminary results not closing a call — and
-/// a mismatch must stay non-fatal.
+/// Approval requests are persisted in assistant history, so they bind to the
+/// effective call id. Completed provider-executed calls wait in FIFO order per
+/// raw id; a request emitted before the canonical close binds to the active
+/// call. A mismatch stays non-fatal and leaves the provider id unchanged.
+/// Provider tool results retire the matching pending call. This prevents a
+/// late approval for a reused raw id from binding to a call that already
+/// completed without approval.
 #[derive(Default)]
 pub(crate) struct ToolCallIdNormalizer {
     active: HashMap<String, ActiveToolCall>,
+    approval_bindings: HashMap<String, VecDeque<ProviderCallBinding>>,
     next_suffix: HashMap<String, i64>,
     used_effective: HashSet<String>,
 }
@@ -33,6 +34,14 @@ pub(crate) struct ToolCallIdNormalizer {
 struct ActiveToolCall {
     effective_id: String,
     tool_name: String,
+    provider_executed: Option<bool>,
+    approval_bound: bool,
+}
+
+struct ProviderCallBinding {
+    effective_id: String,
+    tool_name: String,
+    approval_bound: bool,
 }
 
 /// Overlapping reuse of a still-open tool-call id. Deltas for the two calls
@@ -68,7 +77,12 @@ impl ToolCallIdNormalizer {
         part: &mut LanguageModelV4StreamPart,
     ) -> Result<(), ToolCallIdError> {
         match part {
-            LanguageModelV4StreamPart::ToolInputStart { id, tool_name, .. } => {
+            LanguageModelV4StreamPart::ToolInputStart {
+                id,
+                tool_name,
+                provider_executed,
+                ..
+            } => {
                 let raw_id = id.clone();
                 if let Some(active) = self.active.get(&raw_id) {
                     return Err(ToolCallIdError {
@@ -84,6 +98,8 @@ impl ToolCallIdNormalizer {
                     ActiveToolCall {
                         effective_id: effective_id.clone(),
                         tool_name: tool_name.clone(),
+                        provider_executed: *provider_executed,
+                        approval_bound: false,
                     },
                 );
                 *id = effective_id;
@@ -96,17 +112,65 @@ impl ToolCallIdNormalizer {
             }
             LanguageModelV4StreamPart::ToolCall(tool_call) => {
                 let raw_id = tool_call.tool_call_id.clone();
-                let effective_id = if let Some(active) = self.active.remove(&raw_id) {
-                    active.effective_id
-                } else {
-                    self.allocate(&raw_id)
-                };
+                let (effective_id, approval_bound, started_provider_executed) =
+                    if let Some(active) = self.active.remove(&raw_id) {
+                        (
+                            active.effective_id,
+                            active.approval_bound,
+                            active.provider_executed,
+                        )
+                    } else {
+                        (self.allocate(&raw_id), false, None)
+                    };
+                if tool_call.provider_executed.or(started_provider_executed) == Some(true) {
+                    self.approval_bindings.entry(raw_id).or_default().push_back(
+                        ProviderCallBinding {
+                            effective_id: effective_id.clone(),
+                            tool_name: tool_call.tool_name.clone(),
+                            approval_bound,
+                        },
+                    );
+                }
                 tool_call.tool_call_id = effective_id;
             }
-            // Left verbatim on purpose — see the type docs.
-            LanguageModelV4StreamPart::ToolApprovalRequest(_)
-            | LanguageModelV4StreamPart::ToolResult(_)
-            | LanguageModelV4StreamPart::StreamStart { .. }
+            LanguageModelV4StreamPart::ToolApprovalRequest(request) => {
+                let raw_id = request.tool_call_id.clone();
+                if let Some(active) = self.active.get_mut(&raw_id) {
+                    request.tool_call_id = active.effective_id.clone();
+                    active.approval_bound = true;
+                } else if let Some(binding) =
+                    self.approval_bindings
+                        .get_mut(&raw_id)
+                        .and_then(|bindings| {
+                            bindings.iter_mut().find(|binding| !binding.approval_bound)
+                        })
+                {
+                    request.tool_call_id = binding.effective_id.clone();
+                    binding.approval_bound = true;
+                }
+            }
+            LanguageModelV4StreamPart::ToolResult(result) => {
+                let raw_id = result.tool_call_id.clone();
+                let is_final = result.preliminary != Some(true);
+                if let Some(bindings) = self.approval_bindings.get_mut(&raw_id)
+                    && let Some(position) = bindings
+                        .iter()
+                        .position(|binding| binding.tool_name == result.tool_name)
+                {
+                    result.tool_call_id = bindings[position].effective_id.clone();
+                    if is_final {
+                        bindings.remove(position);
+                    }
+                }
+                if self
+                    .approval_bindings
+                    .get(&raw_id)
+                    .is_some_and(VecDeque::is_empty)
+                {
+                    self.approval_bindings.remove(&raw_id);
+                }
+            }
+            LanguageModelV4StreamPart::StreamStart { .. }
             | LanguageModelV4StreamPart::TextStart { .. }
             | LanguageModelV4StreamPart::TextDelta { .. }
             | LanguageModelV4StreamPart::TextEnd { .. }
@@ -120,7 +184,7 @@ impl ToolCallIdNormalizer {
             | LanguageModelV4StreamPart::Error { .. }
             | LanguageModelV4StreamPart::ResponseMetadata(_)
             | LanguageModelV4StreamPart::Raw { .. }
-            | LanguageModelV4StreamPart::Custom { .. } => {}
+            | LanguageModelV4StreamPart::Custom(_) => {}
         }
         Ok(())
     }

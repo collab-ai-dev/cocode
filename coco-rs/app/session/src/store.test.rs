@@ -191,6 +191,63 @@ fn test_disk_and_memory_backends_derive_identical_content_metadata() {
 }
 
 #[test]
+fn disk_and_memory_main_and_agent_chains_are_exactly_once() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stores: Vec<(&str, Arc<dyn SessionStore>)> = vec![
+        (
+            "disk",
+            Arc::new(TranscriptStore::new(Arc::new(
+                coco_paths::ProjectPaths::new(dir.path().to_path_buf(), Path::new("/exactly-once")),
+            ))),
+        ),
+        ("memory", Arc::new(InMemoryStore::new())),
+    ];
+    for (backend, store) in stores {
+        let sid = format!("exactly-once-{backend}");
+        let conversation = sample_conversation();
+        let refs = conversation.iter().collect::<Vec<_>>();
+
+        let mut main_seen = HashSet::new();
+        let first = store
+            .append_message_chain(&sid, &refs, &mut main_seen, chain_opts())
+            .expect("first main append");
+        let retry = store
+            .append_message_chain(&sid, &refs, &mut main_seen, chain_opts())
+            .expect("retry main append");
+        assert_eq!(first.appended, 2, "{backend} first main append");
+        assert_eq!(retry.appended, 0, "{backend} main retry");
+        assert_eq!(store.load_transcript_messages(&sid).unwrap().len(), 2);
+
+        let mut agent_seen = HashSet::new();
+        let mut agent_options = chain_opts();
+        agent_options.is_sidechain = true;
+        agent_options.agent_id = Some("agent-1".into());
+        let first = store
+            .append_agent_message_chain(
+                &sid,
+                "agent-1",
+                &refs,
+                &mut agent_seen,
+                agent_options.clone(),
+            )
+            .expect("first agent append");
+        let retry = store
+            .append_agent_message_chain(&sid, "agent-1", &refs, &mut agent_seen, agent_options)
+            .expect("retry agent append");
+        assert_eq!(first.appended, 2, "{backend} first agent append");
+        assert_eq!(retry.appended, 0, "{backend} agent retry");
+        assert_eq!(
+            store
+                .load_agent_messages(&sid, "agent-1")
+                .unwrap()
+                .expect("agent transcript")
+                .len(),
+            2,
+        );
+    }
+}
+
+#[test]
 fn test_session_manager_full_lifecycle_on_memory_backend() {
     // Build the manager via the config selector (the production path).
     let manager = SessionManager::with_backend(

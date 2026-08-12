@@ -782,12 +782,8 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         invalid_reason: None,
                     }));
                     if let Some(res) = result {
-                        content.push(AssistantContentPart::ToolResult(
-                            vercel_ai_provider::ToolResultPart::new(
-                                call_id,
-                                "image_generation",
-                                vercel_ai_provider::ToolResultContent::json(res.clone()),
-                            ),
+                        content.push(AssistantContentPart::File(
+                            vercel_ai_provider::FilePart::from_base64(res, "image/png"),
                         ));
                     }
                 }
@@ -796,6 +792,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                     name,
                     arguments,
                     server_label,
+                    approval_request_id,
                     output,
                     error,
                 } => {
@@ -807,6 +804,12 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                     let mut meta_map = HashMap::new();
                     if let Some(label) = server_label {
                         meta_map.insert("serverLabel".into(), Value::String(label.clone()));
+                    }
+                    if let Some(approval_id) = approval_request_id {
+                        meta_map.insert(
+                            "approvalRequestId".into(),
+                            Value::String(approval_id.clone()),
+                        );
                     }
                     let meta = if meta_map.is_empty() {
                         None
@@ -846,6 +849,11 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                 ResponseOutputItem::McpApprovalRequest { id, rest } => {
                     let approval_id = id.clone().unwrap_or_default();
                     let mut part = ToolApprovalRequestPart::new(approval_id.clone(), approval_id);
+                    if let Some(arguments) = rest.get("arguments").and_then(|v| v.as_str()) {
+                        let input = serde_json::from_str(arguments)
+                            .unwrap_or_else(|_| Value::String(arguments.to_string()));
+                        part = part.with_input(input);
+                    }
                     if let Some(name) = rest.get("name").and_then(|v| v.as_str()) {
                         part = part.with_tool_name(name);
                     }
@@ -860,6 +868,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                     action,
                     ..
                 } => {
+                    let provider_metadata = id.as_deref().map(openai_item_id_metadata);
                     content.push(AssistantContentPart::ToolCall(ToolCallPart {
                         tool_call_id: call_id.clone().or_else(|| id.clone()).unwrap_or_default(),
                         tool_name: "local_shell".into(),
@@ -867,7 +876,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         provider_executed: Some(true),
                         invalid: false,
                         invalid_reason: None,
-                        provider_metadata: None,
+                        provider_metadata,
                     }));
                 }
                 ResponseOutputItem::ShellCall {
@@ -878,6 +887,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                     ..
                 } => {
                     let tc_id = call_id.clone().or_else(|| id.clone()).unwrap_or_default();
+                    let provider_metadata = id.as_deref().map(openai_item_id_metadata);
                     content.push(AssistantContentPart::ToolCall(ToolCallPart {
                         tool_call_id: tc_id.clone(),
                         tool_name: "shell".into(),
@@ -885,7 +895,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         provider_executed: Some(true),
                         invalid: false,
                         invalid_reason: None,
-                        provider_metadata: None,
+                        provider_metadata,
                     }));
                     if let Some(outs) = output {
                         content.push(AssistantContentPart::ToolResult(
@@ -903,6 +913,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                     operation,
                     ..
                 } => {
+                    let provider_metadata = id.as_deref().map(openai_item_id_metadata);
                     content.push(AssistantContentPart::ToolCall(ToolCallPart {
                         tool_call_id: call_id.clone().or_else(|| id.clone()).unwrap_or_default(),
                         tool_name: "apply_patch".into(),
@@ -910,7 +921,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         provider_executed: Some(true),
                         invalid: false,
                         invalid_reason: None,
-                        provider_metadata: None,
+                        provider_metadata,
                     }));
                 }
                 ResponseOutputItem::ToolSearchCall {
@@ -1178,6 +1189,15 @@ struct ResponsesStreamState {
     include_raw: bool,
     response_id: Option<String>,
     service_tier: Option<String>,
+}
+
+fn openai_item_id_metadata(item_id: &str) -> ProviderMetadata {
+    let mut openai = serde_json::Map::new();
+    openai.insert("itemId".into(), Value::String(item_id.to_string()));
+    ProviderMetadata(HashMap::from([(
+        "openai".to_string(),
+        Value::Object(openai),
+    )]))
 }
 
 impl ResponsesStreamState {
@@ -2041,73 +2061,100 @@ impl ResponsesStreamState {
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolCall(tc));
                         if let Some(res) = result {
-                            self.pending
-                                .push_back(LanguageModelV4StreamPart::ToolResult(
-                                    vercel_ai_provider::LanguageModelV4ToolResult::new(
-                                        &item_id,
-                                        "image_generation",
-                                        res.clone(),
-                                    ),
-                                ));
+                            self.pending.push_back(LanguageModelV4StreamPart::File(
+                                vercel_ai_provider::FilePart::from_base64(res, "image/png"),
+                            ));
                         }
                     }
                     ResponseOutputItem::ShellCall {
-                        id, action, output, ..
+                        id,
+                        call_id,
+                        action,
+                        output,
+                        ..
                     } => {
+                        let item_metadata = id.as_deref().map(openai_item_id_metadata);
                         let item_id = id.clone().unwrap_or_default();
+                        let effective_id = call_id.clone().unwrap_or_else(|| item_id.clone());
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolInputEnd {
-                                id: item_id.clone(),
+                                id: effective_id.clone(),
                                 provider_metadata: None,
                             });
                         let tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
-                            &item_id,
+                            &effective_id,
                             "shell",
                             action.clone().unwrap_or(Value::Null),
                         )
                         .with_provider_executed(true);
+                        let tc = match item_metadata {
+                            Some(metadata) => tc.with_metadata(metadata),
+                            None => tc,
+                        };
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolCall(tc));
                         if let Some(outs) = output {
                             self.pending
                                 .push_back(LanguageModelV4StreamPart::ToolResult(
                                     vercel_ai_provider::LanguageModelV4ToolResult::new(
-                                        &item_id,
+                                        &effective_id,
                                         "shell",
                                         json!(outs),
                                     ),
                                 ));
                         }
                     }
-                    ResponseOutputItem::LocalShellCall { id, action, .. } => {
+                    ResponseOutputItem::LocalShellCall {
+                        id,
+                        call_id,
+                        action,
+                        ..
+                    } => {
+                        let item_metadata = id.as_deref().map(openai_item_id_metadata);
                         let item_id = id.clone().unwrap_or_default();
+                        let effective_id = call_id.clone().unwrap_or_else(|| item_id.clone());
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolInputEnd {
-                                id: item_id.clone(),
+                                id: effective_id.clone(),
                                 provider_metadata: None,
                             });
                         let tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
-                            &item_id,
+                            &effective_id,
                             "local_shell",
                             action.clone().unwrap_or(Value::Null),
                         )
                         .with_provider_executed(true);
+                        let tc = match item_metadata {
+                            Some(metadata) => tc.with_metadata(metadata),
+                            None => tc,
+                        };
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolCall(tc));
                     }
-                    ResponseOutputItem::ApplyPatchCall { id, operation, .. } => {
+                    ResponseOutputItem::ApplyPatchCall {
+                        id,
+                        call_id,
+                        operation,
+                        ..
+                    } => {
+                        let item_metadata = id.as_deref().map(openai_item_id_metadata);
                         let item_id = id.clone().unwrap_or_default();
+                        let effective_id = call_id.clone().unwrap_or_else(|| item_id.clone());
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolInputEnd {
-                                id: item_id.clone(),
+                                id: effective_id.clone(),
                                 provider_metadata: None,
                             });
                         let tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
-                            &item_id,
+                            &effective_id,
                             "apply_patch",
                             operation.clone().unwrap_or(Value::Null),
                         )
                         .with_provider_executed(true);
+                        let tc = match item_metadata {
+                            Some(metadata) => tc.with_metadata(metadata),
+                            None => tc,
+                        };
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolCall(tc));
                     }
@@ -2115,6 +2162,8 @@ impl ResponsesStreamState {
                         id,
                         name,
                         arguments,
+                        server_label,
+                        approval_request_id,
                         output,
                         error,
                         ..
@@ -2136,6 +2185,21 @@ impl ResponsesStreamState {
                             parsed_args,
                         )
                         .with_provider_executed(true);
+                        let mut metadata = HashMap::new();
+                        if let Some(label) = server_label {
+                            metadata.insert("serverLabel".into(), Value::String(label.clone()));
+                        }
+                        if let Some(approval_id) = approval_request_id {
+                            metadata.insert(
+                                "approvalRequestId".into(),
+                                Value::String(approval_id.clone()),
+                            );
+                        }
+                        let tc = if metadata.is_empty() {
+                            tc
+                        } else {
+                            tc.with_metadata(ProviderMetadata(metadata))
+                        };
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolCall(tc));
                         if let Some(err) = error {
@@ -2160,11 +2224,19 @@ impl ResponsesStreamState {
                     }
                     ResponseOutputItem::McpApprovalRequest { id, rest } => {
                         let approval_id = id.clone().unwrap_or_default();
-                        let req = vercel_ai_provider::language_model::v4::LanguageModelV4ToolApprovalRequest::new(
-                            approval_id.clone(),
-                            approval_id,
-                        );
-                        let _ = rest;
+                        let mut req =
+                            ToolApprovalRequestPart::new(approval_id.clone(), approval_id);
+                        if let Some(arguments) = rest.get("arguments").and_then(|v| v.as_str()) {
+                            let input = serde_json::from_str(arguments)
+                                .unwrap_or_else(|_| Value::String(arguments.to_string()));
+                            req = req.with_input(input);
+                        }
+                        if let Some(name) = rest.get("name").and_then(|v| v.as_str()) {
+                            req = req.with_tool_name(name);
+                        }
+                        if let Some(label) = rest.get("server_label").and_then(|v| v.as_str()) {
+                            req = req.with_context(label);
+                        }
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolApprovalRequest(req));
                     }
@@ -2301,10 +2373,10 @@ impl ResponsesStreamState {
                             id.as_deref().unwrap_or_default(),
                             encrypted_content.as_deref(),
                         );
-                        self.pending.push_back(LanguageModelV4StreamPart::Custom {
-                            kind: "openai-compaction".into(),
-                            provider_metadata: Some(pm),
-                        });
+                        self.pending.push_back(LanguageModelV4StreamPart::Custom(
+                            vercel_ai_provider::CustomPart::new("openai-compaction")
+                                .with_provider_metadata(pm),
+                        ));
                     }
                     _ => {}
                 }

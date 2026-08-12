@@ -129,12 +129,12 @@ fn test_error_part() {
 
 #[test]
 fn test_source_type() {
-    let source = Source::url("src-1", "https://example.com");
+    let source = SourcePart::url("src-1", "https://example.com");
     let json = serde_json::to_string(&source).unwrap();
     assert!(json.contains("source"));
     assert!(json.contains("url"));
 
-    let doc = Source::document("doc-1", "My Document", "application/pdf");
+    let doc = SourcePart::document("doc-1", "My Document", "application/pdf");
     let json = serde_json::to_string(&doc).unwrap();
     assert!(json.contains("document"));
     assert!(json.contains("application/pdf"));
@@ -142,11 +142,7 @@ fn test_source_type() {
 
 #[test]
 fn test_file() {
-    let file = File {
-        data: "base64data".to_string(),
-        media_type: "image/png".to_string(),
-        provider_metadata: None,
-    };
+    let file = FilePart::from_base64("base64data", "image/png");
     let json = serde_json::to_string(&file).unwrap();
     assert!(json.contains("base64data"));
     assert!(json.contains("image/png"));
@@ -154,16 +150,13 @@ fn test_file() {
 
 #[test]
 fn test_custom_stream_part_serialization() {
-    let part = LanguageModelV4StreamPart::Custom {
-        kind: "openai-compaction".into(),
-        provider_metadata: None,
-    };
+    let part = LanguageModelV4StreamPart::Custom(CustomPart::new("openai-compaction"));
     let json = serde_json::to_string(&part).unwrap();
     assert!(json.contains(r#""type":"custom""#));
     assert!(json.contains(r#""kind":"openai-compaction""#));
 
     let deserialized: LanguageModelV4StreamPart = serde_json::from_str(&json).unwrap();
     assert!(
-        matches!(deserialized, LanguageModelV4StreamPart::Custom { kind, .. } if kind == "openai-compaction")
+        matches!(deserialized, LanguageModelV4StreamPart::Custom(custom) if custom.kind == "openai-compaction")
     );
 }

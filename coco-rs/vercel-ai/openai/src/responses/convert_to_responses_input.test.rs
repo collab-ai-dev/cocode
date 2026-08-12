@@ -568,3 +568,104 @@ fn the_byte_prefilter_does_not_misclassify_multibyte_ids() {
     assert!(ResponsesCallIdProjector::is_over_limit(&over));
     assert_ne!(projected_call_id(&over), over);
 }
+
+#[test]
+fn replays_provider_executed_mcp_call_with_its_result() {
+    let mut metadata = vercel_ai_provider::ProviderMetadata::default();
+    metadata.0.insert(
+        "serverLabel".into(),
+        serde_json::Value::String("remote".into()),
+    );
+    metadata.0.insert(
+        "approvalRequestId".into(),
+        serde_json::Value::String("approval_1".into()),
+    );
+    let call = ToolCallPart::new("mcp_1", "lookup", serde_json::json!({"q": "rust"}))
+        .with_provider_executed(true)
+        .with_metadata(metadata);
+    let result = ToolResultPart::new(
+        "mcp_1",
+        "lookup",
+        ToolResultContent::json(serde_json::json!({"answer": 42})),
+    );
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![
+            AssistantContentPart::ToolCall(call),
+            AssistantContentPart::ToolResult(result),
+        ],
+        provider_options: None,
+    }];
+
+    let (items, warnings) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+
+    assert!(warnings.is_empty());
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["type"], "mcp_call");
+    assert_eq!(items[0]["id"], "mcp_1");
+    assert_eq!(items[0]["server_label"], "remote");
+    assert_eq!(items[0]["approval_request_id"], "approval_1");
+    assert_eq!(items[0]["arguments"], r#"{"q":"rust"}"#);
+    assert_eq!(items[0]["output"], r#"{"answer":42}"#);
+}
+
+#[test]
+fn replays_mcp_approval_request_and_reasoned_response() {
+    let request = vercel_ai_provider::ToolApprovalRequestPart::new("approval_1", "mcp_1")
+        .with_input(serde_json::json!({"q": "rust"}))
+        .with_tool_name("lookup")
+        .with_context("remote");
+    let mut response =
+        vercel_ai_provider::content::ToolApprovalResponsePart::new("approval_1", false);
+    response.reason = Some("not trusted".into());
+    let prompt = vec![
+        LanguageModelV4Message::Assistant {
+            content: vec![AssistantContentPart::ToolApprovalRequest(request)],
+            provider_options: None,
+        },
+        LanguageModelV4Message::Tool {
+            content: vec![ToolContentPart::ToolApprovalResponse(response)],
+            provider_options: None,
+        },
+    ];
+
+    let (items, warnings) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+
+    assert!(warnings.is_empty());
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["type"], "mcp_approval_request");
+    assert_eq!(items[0]["id"], "approval_1");
+    assert_eq!(items[0]["arguments"], r#"{"q":"rust"}"#);
+    assert_eq!(items[1]["type"], "mcp_approval_response");
+    assert_eq!(items[1]["approval_request_id"], "approval_1");
+    assert_eq!(items[1]["approve"], false);
+    assert_eq!(items[1]["reason"], "not trusted");
+}
+
+#[test]
+fn replays_code_interpreter_call_with_outputs_as_one_native_item() {
+    let call = ToolCallPart::new(
+        "ci_1",
+        "code_interpreter",
+        serde_json::json!({"type": "code_interpreter", "code": "print(42)"}),
+    )
+    .with_provider_executed(true);
+    let result = ToolResultPart::new(
+        "ci_1",
+        "code_interpreter",
+        ToolResultContent::json(serde_json::json!([{"type": "logs", "logs": "42"}])),
+    );
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![
+            AssistantContentPart::ToolCall(call),
+            AssistantContentPart::ToolResult(result),
+        ],
+        provider_options: None,
+    }];
+
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["type"], "code_interpreter_call");
+    assert_eq!(items[0]["code"], "print(42)");
+    assert_eq!(items[0]["outputs"][0]["logs"], "42");
+}

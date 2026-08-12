@@ -517,3 +517,131 @@ async fn client_tool_search_stream_uses_call_id_and_emits_arguments() {
     assert!(saw_end, "missing tool input end for call_id");
     assert!(saw_call, "missing tool call for call_id");
 }
+
+#[tokio::test]
+async fn mcp_approval_stream_preserves_tool_name_and_server_context() {
+    use bytes::Bytes;
+    use futures::StreamExt;
+
+    let done = serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "mcp_approval_request",
+            "id": "approval_123",
+            "name": "search",
+            "arguments": "{\"query\":\"rust\"}",
+            "server_label": "docs-server"
+        }
+    });
+    let sse = format!("data: {done}\n\n");
+    let byte_stream: vercel_ai_provider_utils::ByteStream =
+        Box::pin(futures::stream::iter([Ok::<Bytes, reqwest::Error>(
+            Bytes::from(sse),
+        )]));
+    let mut stream = create_responses_stream(byte_stream, Vec::new(), false);
+
+    while let Some(part) = stream.next().await {
+        if let LanguageModelV4StreamPart::ToolApprovalRequest(request) = part.expect("stream part")
+        {
+            assert_eq!(request.approval_id, "approval_123");
+            assert_eq!(request.tool_call_id, "approval_123");
+            assert_eq!(request.tool_name.as_deref(), Some("search"));
+            assert_eq!(request.context.as_deref(), Some("docs-server"));
+            assert_eq!(request.input, Some(serde_json::json!({"query": "rust"})));
+            return;
+        }
+    }
+    panic!("expected approval request");
+}
+
+#[tokio::test]
+async fn mcp_stream_preserves_replay_metadata_and_result() {
+    use bytes::Bytes;
+    use futures::StreamExt;
+
+    let done = serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "mcp_call",
+            "id": "mcp_123",
+            "name": "search",
+            "arguments": "{\"query\":\"rust\"}",
+            "server_label": "docs-server",
+            "approval_request_id": "approval_123",
+            "output": {"answer": 42}
+        }
+    });
+    let sse = format!("data: {done}\n\n");
+    let byte_stream: vercel_ai_provider_utils::ByteStream =
+        Box::pin(futures::stream::iter([Ok::<Bytes, reqwest::Error>(
+            Bytes::from(sse),
+        )]));
+    let mut stream = create_responses_stream(byte_stream, Vec::new(), false);
+    let mut call = None;
+    let mut result = None;
+
+    while let Some(part) = stream.next().await {
+        match part.expect("stream part") {
+            LanguageModelV4StreamPart::ToolCall(value) => call = Some(value),
+            LanguageModelV4StreamPart::ToolResult(value) => result = Some(value),
+            _ => {}
+        }
+    }
+
+    let call = call.expect("MCP call");
+    assert_eq!(call.tool_call_id, "mcp_123");
+    assert_eq!(call.tool_name, "search");
+    let metadata = call.provider_metadata.expect("MCP replay metadata");
+    assert_eq!(metadata.0["serverLabel"], "docs-server");
+    assert_eq!(metadata.0["approvalRequestId"], "approval_123");
+    let result = result.expect("MCP result");
+    assert_eq!(result.tool_call_id, "mcp_123");
+    assert_eq!(result.result, serde_json::json!({"answer": 42}));
+}
+
+#[tokio::test]
+async fn image_generation_stream_emits_canonical_file_instead_of_json_result() {
+    use bytes::Bytes;
+    use futures::StreamExt;
+
+    let done = serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "image_generation_call",
+            "id": "image_123",
+            "status": "completed",
+            "result": "aW1hZ2U="
+        }
+    });
+    let sse = format!("data: {done}\n\n");
+    let byte_stream: vercel_ai_provider_utils::ByteStream =
+        Box::pin(futures::stream::iter([Ok::<Bytes, reqwest::Error>(
+            Bytes::from(sse),
+        )]));
+    let mut stream = create_responses_stream(byte_stream, Vec::new(), false);
+    let mut saw_call = false;
+    let mut file = None;
+    let mut saw_result = false;
+
+    while let Some(part) = stream.next().await {
+        match part.expect("stream part") {
+            LanguageModelV4StreamPart::ToolCall(call) => {
+                saw_call |= call.tool_name == "image_generation";
+            }
+            LanguageModelV4StreamPart::File(value) => file = Some(value),
+            LanguageModelV4StreamPart::ToolResult(_) => saw_result = true,
+            _ => {}
+        }
+    }
+
+    assert!(saw_call);
+    assert!(!saw_result, "base64 media must not bypass File bounding");
+    let file = file.expect("canonical generated file");
+    assert_eq!(file.media_type, "image/png");
+    assert_eq!(
+        file.data
+            .as_data()
+            .and_then(vercel_ai_provider::FileRawData::as_base64),
+        Some("aW1hZ2U=")
+    );
+}

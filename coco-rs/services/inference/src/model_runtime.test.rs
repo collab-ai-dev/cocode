@@ -87,6 +87,28 @@ fn local_provider(models: &[&str]) -> PartialProviderConfig {
     }
 }
 
+fn lazy_runtime_config(base_url: &str) -> Arc<RuntimeConfig> {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let mut provider = local_provider(&["main", "lazy"]);
+    provider.base_url = Some(base_url.to_string());
+    let runtime = coco_config::build_runtime_config_with(
+        isolated_settings(Settings {
+            models: coco_config::ModelSelectionSettings {
+                main: Some(role_slots("local", "main")),
+                ..Default::default()
+            },
+            providers: BTreeMap::from([("local".to_string(), provider)]),
+            ..Default::default()
+        }),
+        coco_config::EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+        coco_config::CatalogPaths::empty_in(tmp.path()),
+        coco_config::parse_enabled_setting_sources(None),
+    )
+    .expect("runtime config");
+    Arc::new(runtime)
+}
+
 struct StubModel {
     id: &'static str,
 }
@@ -324,6 +346,127 @@ fn test_explicit_moa_source_uses_aggregator_runtime() {
         registry
             .moa_endpoint_for_source(&ModelRuntimeSource::Role(coco_types::ModelRole::Plan))
             .is_none()
+    );
+}
+
+#[test]
+fn test_concurrent_explicit_lookup_returns_canonical_runtime() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let mut providers = BTreeMap::new();
+    providers.insert("local".to_string(), local_provider(&["main", "lazy"]));
+    let runtime_config = coco_config::build_runtime_config_with(
+        isolated_settings(Settings {
+            models: coco_config::ModelSelectionSettings {
+                main: Some(role_slots("local", "main")),
+                ..Default::default()
+            },
+            providers,
+            ..Default::default()
+        }),
+        coco_config::EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+        coco_config::CatalogPaths::empty_in(tmp.path()),
+        coco_config::parse_enabled_setting_sources(None),
+    )
+    .expect("runtime config");
+    let registry = Arc::new(
+        ModelRuntimeRegistry::new(
+            Arc::new(runtime_config),
+            None,
+            Arc::new(crate::header_template::HeaderVars::empty()),
+        )
+        .expect("runtime registry"),
+    );
+    let build_count = Arc::new(AtomicUsize::new(0));
+    registry.set_lazy_build_hook({
+        let build_count = Arc::clone(&build_count);
+        Arc::new(move || {
+            build_count.fetch_add(1, Ordering::SeqCst);
+        })
+    });
+    let workers = 16;
+    let barrier = Arc::new(std::sync::Barrier::new(workers));
+    let mut handles = Vec::with_capacity(workers);
+    for _ in 0..workers {
+        let registry = Arc::clone(&registry);
+        let barrier = Arc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            barrier.wait();
+            registry
+                .runtime_for_explicit(selection("local", "lazy"))
+                .expect("explicit runtime")
+        }));
+    }
+    let runtimes: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().expect("lookup thread"))
+        .collect();
+
+    assert!(
+        runtimes
+            .iter()
+            .all(|runtime| Arc::ptr_eq(runtime, &runtimes[0])),
+        "every caller must receive the registry's canonical Arc"
+    );
+    assert_eq!(
+        build_count.load(Ordering::SeqCst),
+        1,
+        "single-flight must construct the lazy client exactly once"
+    );
+}
+
+#[test]
+fn stale_lazy_build_cannot_publish_after_reconcile() {
+    let old_url = "http://old.example/v1";
+    let new_url = "http://new.example/v1";
+    let registry = Arc::new(
+        ModelRuntimeRegistry::new(
+            lazy_runtime_config(old_url),
+            None,
+            Arc::new(crate::header_template::HeaderVars::empty()),
+        )
+        .expect("registry"),
+    );
+    let build_started = Arc::new(std::sync::Barrier::new(2));
+    let release_build = Arc::new(std::sync::Barrier::new(2));
+    let hook_calls = Arc::new(AtomicUsize::new(0));
+    registry.set_lazy_build_hook({
+        let build_started = Arc::clone(&build_started);
+        let release_build = Arc::clone(&release_build);
+        let hook_calls = Arc::clone(&hook_calls);
+        Arc::new(move || {
+            if hook_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                build_started.wait();
+                release_build.wait();
+            }
+        })
+    });
+
+    let lookup = {
+        let registry = Arc::clone(&registry);
+        std::thread::spawn(move || {
+            registry
+                .runtime_for_explicit(selection("local", "lazy"))
+                .expect("lazy runtime")
+        })
+    };
+    build_started.wait();
+    registry
+        .reconcile(lazy_runtime_config(new_url))
+        .expect("reconcile");
+    release_build.wait();
+
+    let runtime = lookup.join().expect("lookup thread");
+    let base_url = mutex_lock(&runtime)
+        .current_client()
+        .fingerprint()
+        .base_url
+        .clone();
+    assert_eq!(base_url, new_url);
+    assert_eq!(
+        hook_calls.load(Ordering::SeqCst),
+        2,
+        "the stale build must be discarded and rebuilt from the new generation"
     );
 }
 

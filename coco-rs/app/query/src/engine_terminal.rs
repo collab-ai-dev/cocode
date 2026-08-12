@@ -272,6 +272,48 @@ impl QueryEngine {
         )
     }
 
+    pub(crate) async fn handle_assistant_payload_error_terminal(
+        &self,
+        consts: &LoopConstants,
+        acc: &LoopAccumulator,
+        turn_state: &LoopTurnState,
+        message: &str,
+        history: &mut MessageHistory,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    ) -> QueryResult {
+        warn!(
+            error = message,
+            "rejecting unsafe provider structured payload"
+        );
+        crate::history_sync::history_push_and_emit(
+            history,
+            coco_messages::create_assistant_error_message(
+                message,
+                None,
+                Some("invalid_provider_payload"),
+            ),
+            event_tx,
+        )
+        .await;
+        mark_query_failed(
+            make_query_result(
+                consts,
+                acc,
+                turn_state,
+                String::new(),
+                /*cancelled*/ false,
+                /*budget_exhausted*/ false,
+                Some("invalid_provider_payload".into()),
+                history.to_vec(),
+                history.snapshot(),
+            ),
+            coco_types::ErrorPayload {
+                message: message.to_string(),
+                code: coco_types::ErrorCode::Provider,
+            },
+        )
+    }
+
     pub(crate) async fn handle_usd_budget_terminal(
         &self,
         consts: &LoopConstants,

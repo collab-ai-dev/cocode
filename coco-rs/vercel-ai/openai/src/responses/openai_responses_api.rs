@@ -119,7 +119,7 @@ pub enum ResponseOutputItem {
     #[serde(rename = "image_generation_call")]
     ImageGenerationCall {
         id: Option<String>,
-        result: Option<Value>,
+        result: Option<String>,
     },
     #[serde(rename = "mcp_call")]
     McpCall {
@@ -127,6 +127,7 @@ pub enum ResponseOutputItem {
         name: Option<String>,
         arguments: Option<String>,
         server_label: Option<String>,
+        approval_request_id: Option<String>,
         output: Option<Value>,
         error: Option<Value>,
     },

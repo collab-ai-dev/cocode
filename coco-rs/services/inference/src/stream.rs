@@ -6,9 +6,16 @@
 //! verbatim. See `docs/internal/streaming-metadata-roundtrip-plan.md`.
 
 use coco_llm_types::AssistantContentPart;
+use coco_llm_types::CustomPart;
+use coco_llm_types::FilePart;
 use coco_llm_types::FinishReason;
 use coco_llm_types::ProviderMetadata;
+use coco_llm_types::ReasoningFilePart;
+use coco_llm_types::SourcePart;
+use coco_llm_types::ToolApprovalRequestPart;
 use coco_llm_types::ToolInputInvalidReason;
+use coco_llm_types::ToolResultContent;
+use coco_llm_types::ToolResultPart;
 use coco_llm_types::Usage;
 use coco_types::TokenUsage;
 use std::collections::HashMap;
@@ -21,7 +28,6 @@ use tracing::trace;
 use tracing::warn;
 use vercel_ai::StreamProcessor;
 use vercel_ai_provider::AISdkError;
-use vercel_ai_provider::LanguageModelV4FileData;
 use vercel_ai_provider::LanguageModelV4StreamPart;
 use vercel_ai_provider::LanguageModelV4StreamResult;
 
@@ -136,58 +142,18 @@ impl ToolInputWireState {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct FileSegment {
-    pub id: String,
-    /// Always wrapped as `Data { data }` since `LanguageModelV4StreamPart::File`
-    /// carries `data: String` without a URL/base64 discriminator.
-    pub data: LanguageModelV4FileData,
-    pub media_type: String,
-    pub provider_metadata: Option<ProviderMetadata>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ReasoningFileSegment {
-    pub id: String,
-    pub data: LanguageModelV4FileData,
-    pub media_type: String,
-    pub provider_metadata: Option<ProviderMetadata>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SourceSegment {
-    pub id: String,
-    pub url: Option<String>,
-    pub title: Option<String>,
-    pub source_type: String,
-    pub provider_metadata: Option<ProviderMetadata>,
-}
-
-#[derive(Debug, Clone)]
-pub struct CustomSegment {
-    pub id: String,
-    pub data: serde_json::Value,
-    pub provider_metadata: Option<ProviderMetadata>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ToolApprovalRequestSegment {
-    pub approval_id: String,
-    pub tool_call_id: String,
-    pub provider_metadata: Option<ProviderMetadata>,
-}
-
 /// One assistant-turn part, preserving emission order across kinds.
 #[derive(Debug, Clone)]
 pub enum TurnPart {
     Text(TextSegment),
     Reasoning(ReasoningSegment),
     ToolCall(ToolCallSegment),
-    File(FileSegment),
-    ReasoningFile(ReasoningFileSegment),
-    Source(SourceSegment),
-    Custom(CustomSegment),
-    ToolApprovalRequest(ToolApprovalRequestSegment),
+    ToolResult(ToolResultPart),
+    File(FilePart),
+    ReasoningFile(ReasoningFilePart),
+    Source(SourcePart),
+    Custom(CustomPart),
+    ToolApprovalRequest(ToolApprovalRequestPart),
 }
 
 /// Full reconstruction of one assistant turn. Shipped on
@@ -455,68 +421,44 @@ impl AssistantTurnSnapshotState {
                 }
             }
 
+            // Preliminary provider results are transient UI updates. Only the
+            // final value belongs in replayable assistant history.
+            LanguageModelV4StreamPart::ToolResult(result) if result.preliminary != Some(true) => {
+                let mut part = ToolResultPart::new(
+                    result.tool_call_id.clone(),
+                    result.tool_name.clone(),
+                    ToolResultContent::json(result.result.clone()),
+                );
+                part.is_error = result.is_error.unwrap_or(false);
+                part.provider_metadata = result.provider_metadata.clone();
+                self.snapshot.parts.push(TurnPart::ToolResult(part));
+            }
+
             // ─── File ────────────────────────────────────────────────
             LanguageModelV4StreamPart::File(file) => {
-                // Stream `File.data: String` is undifferentiated (could
-                // be base64 or URL by convention but no discriminator on
-                // the wire). We always wrap as `Data { Base64 }` —
-                // matches the dominant case (most providers emit
-                // base64 for generated images); URL-bearing flows would
-                // need a separate wire shape anyway.
-                self.snapshot.parts.push(TurnPart::File(FileSegment {
-                    id: vercel_ai_provider_utils::generate_id("file"),
-                    data: LanguageModelV4FileData::Data {
-                        data: vercel_ai_provider::FileRawData::Base64(file.data.clone()),
-                    },
-                    media_type: file.media_type.clone(),
-                    provider_metadata: file.provider_metadata.clone(),
-                }));
+                self.snapshot.parts.push(TurnPart::File(file.clone()));
             }
             LanguageModelV4StreamPart::ReasoningFile(rfile) => {
                 self.snapshot
                     .parts
-                    .push(TurnPart::ReasoningFile(ReasoningFileSegment {
-                        id: vercel_ai_provider_utils::generate_id("rfile"),
-                        data: LanguageModelV4FileData::Data {
-                            data: vercel_ai_provider::FileRawData::Base64(rfile.data.clone()),
-                        },
-                        media_type: rfile.media_type.clone(),
-                        provider_metadata: rfile.provider_metadata.clone(),
-                    }));
+                    .push(TurnPart::ReasoningFile(rfile.clone()));
             }
 
             // ─── Source ──────────────────────────────────────────────
             LanguageModelV4StreamPart::Source(src) => {
-                self.snapshot.parts.push(TurnPart::Source(SourceSegment {
-                    id: src.id.clone(),
-                    url: src.url.clone(),
-                    title: src.title.clone(),
-                    source_type: format!("{:?}", src.source_type),
-                    provider_metadata: src.provider_metadata.clone(),
-                }));
+                self.snapshot.parts.push(TurnPart::Source(src.clone()));
             }
 
             // ─── Custom ──────────────────────────────────────────────
-            LanguageModelV4StreamPart::Custom {
-                kind,
-                provider_metadata,
-            } => {
-                self.snapshot.parts.push(TurnPart::Custom(CustomSegment {
-                    id: kind.clone(),
-                    data: serde_json::Value::Null,
-                    provider_metadata: provider_metadata.clone(),
-                }));
+            LanguageModelV4StreamPart::Custom(custom) => {
+                self.snapshot.parts.push(TurnPart::Custom(custom.clone()));
             }
 
             // ─── Tool approval request ───────────────────────────────
             LanguageModelV4StreamPart::ToolApprovalRequest(req) => {
-                self.snapshot.parts.push(TurnPart::ToolApprovalRequest(
-                    ToolApprovalRequestSegment {
-                        approval_id: req.approval_id.clone(),
-                        tool_call_id: req.tool_call_id.clone(),
-                        provider_metadata: req.provider_metadata.clone(),
-                    },
-                ));
+                self.snapshot
+                    .parts
+                    .push(TurnPart::ToolApprovalRequest(req.clone()));
             }
             LanguageModelV4StreamPart::ResponseMetadata(meta) => {
                 if meta.id.is_some() {
@@ -974,70 +916,21 @@ pub fn synthetic_stream_from_content(
                 parts.push(Ok(Part::ToolCall(close)));
             }
             AssistantContentPart::File(fp) => {
-                // Convert `FilePart.data` (SharedV4FileData / FileRawData)
-                // to the wire `String` form for synthesis. URL-only
-                // file references don't roundtrip through the stream's
-                // undifferentiated `data: String`.
-                let data = match &fp.data {
-                    coco_llm_types::SharedV4FileData::Data { data } => match data {
-                        vercel_ai_provider::FileRawData::Base64(s) => s.clone(),
-                        vercel_ai_provider::FileRawData::Bytes(_) => data.to_base64(),
-                    },
-                    coco_llm_types::SharedV4FileData::Url { .. }
-                    | coco_llm_types::SharedV4FileData::Reference { .. }
-                    | coco_llm_types::SharedV4FileData::Text { .. } => {
-                        trace!(
-                            "Non-data File variant skipped in synthetic stream (Data-only path)"
-                        );
-                        continue;
-                    }
-                };
-                parts.push(Ok(Part::File(
-                    vercel_ai_provider::language_model::v4::stream::File {
-                        data,
-                        media_type: fp.media_type.clone(),
-                        provider_metadata: fp.provider_metadata,
-                    },
-                )));
+                parts.push(Ok(Part::File(fp)));
             }
             AssistantContentPart::ReasoningFile(rfp) => {
-                let data = match &rfp.data {
-                    LanguageModelV4FileData::Data { data } => match data {
-                        vercel_ai_provider::FileRawData::Base64(s) => s.clone(),
-                        vercel_ai_provider::FileRawData::Bytes(_) => data.to_base64(),
-                    },
-                    LanguageModelV4FileData::Url { .. } => {
-                        trace!("ReasoningFile URL skipped in synthetic stream (Data-only path)");
-                        continue;
-                    }
-                };
-                parts.push(Ok(Part::ReasoningFile(
-                    vercel_ai_provider::language_model::v4::stream::ReasoningFile {
-                        data,
-                        media_type: rfp.media_type.clone(),
-                        provider_metadata: rfp.provider_metadata,
-                    },
-                )));
+                parts.push(Ok(Part::ReasoningFile(rfp)));
             }
             AssistantContentPart::Source(src) => {
                 parts.push(Ok(Part::Source(src)));
             }
             AssistantContentPart::ToolApprovalRequest(req) => {
-                // `ToolApprovalRequestPart` (assistant content) and
-                // `LanguageModelV4ToolApprovalRequest` (stream part) are
-                // distinct types — bridge by copying the two required
-                // ids + metadata.
-                let mut srq = vercel_ai_provider::language_model::v4::tool_approval_request::LanguageModelV4ToolApprovalRequest::new(
-                    req.approval_id,
-                    req.tool_call_id,
-                );
-                if let Some(m) = req.provider_metadata {
-                    srq = srq.with_metadata(m);
-                }
-                parts.push(Ok(Part::ToolApprovalRequest(srq)));
+                parts.push(Ok(Part::ToolApprovalRequest(req)));
             }
-            // ToolResult / Custom are provider-specific and don't have
-            // a clean synthetic representation — skip with a trace.
+            AssistantContentPart::Custom(custom) => {
+                parts.push(Ok(Part::Custom(custom)));
+            }
+            // ToolResult is emitted separately by provider-hosted execution.
             _ => {
                 trace!("AssistantContentPart variant skipped in synthetic stream");
             }

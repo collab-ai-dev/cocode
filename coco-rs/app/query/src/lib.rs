@@ -12,6 +12,7 @@
 //! 9. Loop back to 1 if tool calls, else done
 
 pub mod agent_adapter;
+mod assistant_payload;
 pub mod budget;
 pub mod command_queue;
 pub mod config;
@@ -26,6 +27,7 @@ mod engine_helpers;
 pub mod engine_live_rules;
 mod engine_loop_state;
 mod engine_prompt;
+mod engine_provider_approval;
 mod engine_recovery;
 mod engine_result;
 mod engine_session;

@@ -6,49 +6,18 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use super::finish_reason::FinishReason;
-use super::tool_approval_request::LanguageModelV4ToolApprovalRequest;
 use super::tool_call::LanguageModelV4ToolCall;
 use super::tool_result::LanguageModelV4ToolResult;
 use super::usage::Usage;
+use crate::content::CustomPart;
+use crate::content::FilePart;
+use crate::content::ReasoningFilePart;
+use crate::content::SourcePart;
+use crate::content::ToolApprovalRequestPart;
 use crate::json_value::JSONValue;
 use crate::response_metadata::ResponseMetadata;
 use crate::shared::ProviderMetadata;
 use crate::shared::Warning;
-
-/// Backward-compatible alias for [`LanguageModelV4ToolApprovalRequest`].
-pub type ToolApprovalRequest = LanguageModelV4ToolApprovalRequest;
-
-/// Backward-compatible alias for [`crate::content::SourcePart`].
-pub type Source = crate::content::SourcePart;
-
-/// Backward-compatible alias for [`crate::content::SourceType`].
-pub type SourceType = crate::content::SourceType;
-
-/// A file in a response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct File {
-    /// The file data (base64 or URL).
-    pub data: String,
-    /// The MIME type.
-    pub media_type: String,
-    /// Provider metadata.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider_metadata: Option<ProviderMetadata>,
-}
-
-/// A reasoning file in a response (file data that is part of reasoning).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReasoningFile {
-    /// The file data (base64).
-    pub data: String,
-    /// The MIME type.
-    pub media_type: String,
-    /// Provider metadata.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider_metadata: Option<ProviderMetadata>,
-}
 
 /// A stream part emitted during streaming.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,25 +124,19 @@ pub enum LanguageModelV4StreamPart {
     ToolResult(LanguageModelV4ToolResult),
     /// Emitted when a provider requests approval for a tool execution.
     #[serde(rename = "tool-approval-request")]
-    ToolApprovalRequest(LanguageModelV4ToolApprovalRequest),
+    ToolApprovalRequest(ToolApprovalRequestPart),
     /// Emitted when a file is available.
     #[serde(rename = "file")]
-    File(File),
+    File(FilePart),
     /// Emitted when a reasoning file is available (file data that is part of reasoning).
     #[serde(rename = "reasoning-file")]
-    ReasoningFile(ReasoningFile),
+    ReasoningFile(ReasoningFilePart),
     /// Emitted for custom provider-specific content.
     #[serde(rename = "custom")]
-    Custom {
-        /// The kind of custom content.
-        kind: String,
-        /// Provider metadata.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        provider_metadata: Option<ProviderMetadata>,
-    },
+    Custom(CustomPart),
     /// Emitted when a source is available.
     #[serde(rename = "source")]
-    Source(Source),
+    Source(SourcePart),
     /// Emitted at the start of the stream.
     StreamStart {
         /// Warnings from the provider.

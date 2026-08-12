@@ -124,6 +124,53 @@ struct TextMock {
     text: String,
 }
 
+struct StructuredFileMock {
+    data: String,
+}
+
+#[async_trait::async_trait]
+impl LanguageModel for StructuredFileMock {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+
+    fn model_id(&self) -> &str {
+        "mock-file"
+    }
+
+    async fn do_generate(
+        &self,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
+        Ok(LanguageModelGenerateResult {
+            content: vec![AssistantContentPart::File(
+                coco_llm_types::FilePart::from_base64(self.data.clone(), "text/plain")
+                    .with_filename("hello.txt"),
+            )],
+            usage: Usage::new(10, 5),
+            finish_reason: FinishReason::new(StopReason::EndTurn),
+            warnings: vec![],
+            provider_metadata: None,
+            request: None,
+            response: None,
+        })
+    }
+
+    async fn do_stream(
+        &self,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
+        let result = self.do_generate(options, None).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
+    }
+}
+
 #[async_trait::async_trait]
 impl LanguageModel for TextMock {
     fn provider(&self) -> &str {
@@ -967,6 +1014,83 @@ async fn test_single_turn_text_only() {
     assert_eq!(result.response_text, "Hello!");
     assert_eq!(result.turns, 1);
     assert!(!result.cancelled);
+}
+
+#[tokio::test]
+async fn structured_only_response_is_a_valid_terminal_turn() {
+    let model = Arc::new(StructuredFileMock {
+        data: "aGVsbG8=".into(),
+    });
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("structured-only-session").unwrap(),
+        crate::test_support::model_runtime_registry(model),
+        Arc::new(ToolRegistry::new()),
+        CancellationToken::new(),
+        None,
+    );
+
+    let result = engine.run("generate a file").await.expect("query");
+
+    assert!(matches!(result.outcome, crate::QueryOutcome::Completed));
+    assert_eq!(result.turns, 1, "must not enter empty-response recovery");
+    assert!(result.final_messages.iter().any(|message| {
+        matches!(
+            message.as_ref(),
+            coco_messages::Message::Assistant(coco_messages::AssistantMessage {
+                message: coco_messages::LlmMessage::Assistant { content, .. },
+                ..
+            }) if content.iter().any(|part| matches!(part, AssistantContentPart::File(_)))
+        )
+    }));
+}
+
+#[tokio::test]
+async fn oversized_generated_media_keeps_transcript_bounded_and_writes_artifact() {
+    let payload = "YWFh"
+        .repeat(crate::assistant_payload::MAX_INLINE_ASSISTANT_MEDIA_BASE64_BYTES / 4 + 10_000);
+    let model = Arc::new(StructuredFileMock { data: payload });
+    let session_id = coco_types::SessionId::try_new("generated-media-session").unwrap();
+    let tempdir = tempfile::tempdir().unwrap();
+    let store = Arc::new(coco_session::TranscriptStore::new(Arc::new(
+        coco_paths::ProjectPaths::new(
+            tempdir.path().to_path_buf(),
+            std::path::Path::new("/generated-media"),
+        ),
+    )));
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        session_id.clone(),
+        crate::test_support::model_runtime_registry(model),
+        Arc::new(ToolRegistry::new()),
+        CancellationToken::new(),
+        None,
+    )
+    .with_transcript_store(store.clone(), session_id.clone())
+    .with_transcript_dedup(Arc::new(tokio::sync::Mutex::new(
+        std::collections::HashSet::new(),
+    )));
+
+    let result = engine.run("generate media").await.expect("query");
+
+    assert!(matches!(result.outcome, crate::QueryOutcome::Completed));
+    let transcript_size = std::fs::metadata(store.transcript_path(session_id.as_str()))
+        .expect("transcript")
+        .len();
+    assert!(
+        transcript_size < 10_000,
+        "transcript grew to {transcript_size}"
+    );
+    let media_dir = store
+        .session_artifact_dir(session_id.as_str())
+        .join("assistant-media");
+    assert!(
+        std::fs::read_dir(media_dir)
+            .expect("media directory")
+            .next()
+            .is_some(),
+        "generated media artifact was not written"
+    );
 }
 
 #[tokio::test]
@@ -4642,6 +4766,163 @@ fn approved_test_bridge() -> Arc<dyn ToolPermissionBridge> {
     Arc::new(RecordingBridge::new(ToolPermissionDecision::Approved))
 }
 
+struct ProviderApprovalThenTextMock {
+    calls: AtomicI32,
+    saw_approval_response: std::sync::atomic::AtomicBool,
+    approval_decision: AtomicI32,
+}
+
+#[async_trait::async_trait]
+impl LanguageModel for ProviderApprovalThenTextMock {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+
+    fn model_id(&self) -> &str {
+        "provider-approval"
+    }
+
+    async fn do_generate(
+        &self,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Ok(LanguageModelGenerateResult {
+                content: vec![
+                    AssistantContentPart::ToolCall(ToolCallPart {
+                        tool_call_id: "provider-call-1".into(),
+                        tool_name: "remote_search".into(),
+                        input: serde_json::json!({"query": "rust"}),
+                        provider_executed: Some(true),
+                        invalid: false,
+                        invalid_reason: None,
+                        provider_metadata: None,
+                    }),
+                    AssistantContentPart::ToolApprovalRequest(
+                        coco_llm_types::ToolApprovalRequestPart::new(
+                            "provider-approval-1",
+                            "provider-call-1",
+                        )
+                        .with_tool_name("remote_search")
+                        .with_context("search the remote MCP server"),
+                    ),
+                ],
+                usage: Usage::new(10, 5),
+                finish_reason: FinishReason::new(StopReason::ToolUse),
+                warnings: vec![],
+                provider_metadata: None,
+                request: None,
+                response: None,
+            });
+        }
+
+        let approval_response = options.prompt.iter().find_map(|message| match message {
+            coco_messages::LlmMessage::Tool { content, .. } => {
+                content.iter().find_map(|part| match part {
+                    coco_messages::ToolContent::ToolApprovalResponse(response)
+                        if response.approval_id == "provider-approval-1" =>
+                    {
+                        Some(response.approved)
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        });
+        self.saw_approval_response
+            .store(approval_response.is_some(), Ordering::SeqCst);
+        self.approval_decision
+            .store(approval_response.map_or(-1, i32::from), Ordering::SeqCst);
+        Ok(LanguageModelGenerateResult {
+            content: vec![AssistantContentPart::Text(TextPart::new(
+                "approved and complete",
+            ))],
+            usage: Usage::new(10, 5),
+            finish_reason: FinishReason::new(StopReason::EndTurn),
+            warnings: vec![],
+            provider_metadata: None,
+            request: None,
+            response: None,
+        })
+    }
+
+    async fn do_stream(
+        &self,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
+        let result = self.do_generate(options, None).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
+    }
+}
+
+#[tokio::test]
+async fn provider_approval_uses_permission_bridge_and_resumes_provider() {
+    let model = Arc::new(ProviderApprovalThenTextMock {
+        calls: AtomicI32::new(0),
+        saw_approval_response: std::sync::atomic::AtomicBool::new(false),
+        approval_decision: AtomicI32::new(-1),
+    });
+    let registry = crate::test_support::model_runtime_registry(model.clone());
+    let bridge = Arc::new(RecordingBridge::new(ToolPermissionDecision::Approved));
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("provider-approval-session").unwrap(),
+        registry,
+        Arc::new(ToolRegistry::new()),
+        CancellationToken::new(),
+        None,
+    )
+    .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
+
+    let result = engine.run("use remote search").await.expect("query");
+
+    assert_eq!(result.response_text, "approved and complete");
+    assert!(model.saw_approval_response.load(Ordering::SeqCst));
+    assert_eq!(model.approval_decision.load(Ordering::SeqCst), 1);
+    let calls = bridge.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].tool_use_id, "provider-call-1");
+    assert_eq!(calls[0].tool_name, "remote_search");
+}
+
+#[tokio::test]
+async fn provider_approval_denial_is_sent_back_and_resumes_provider() {
+    let model = Arc::new(ProviderApprovalThenTextMock {
+        calls: AtomicI32::new(0),
+        saw_approval_response: std::sync::atomic::AtomicBool::new(false),
+        approval_decision: AtomicI32::new(-1),
+    });
+    let registry = crate::test_support::model_runtime_registry(model.clone());
+    let bridge = Arc::new(RecordingBridge::new(ToolPermissionDecision::Rejected));
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("provider-denial-session").unwrap(),
+        registry,
+        Arc::new(ToolRegistry::new()),
+        CancellationToken::new(),
+        None,
+    )
+    .with_permission_bridge(bridge as Arc<dyn ToolPermissionBridge>);
+
+    let result = engine.run("use remote search").await.expect("query");
+
+    assert_eq!(result.response_text, "approved and complete");
+    assert!(model.saw_approval_response.load(Ordering::SeqCst));
+    assert_eq!(model.approval_decision.load(Ordering::SeqCst), 0);
+    assert!(result.final_messages.iter().any(|message| {
+        matches!(
+            message.as_ref(),
+            coco_messages::Message::ToolResult(result) if result.is_error
+        )
+    }));
+}
+
 /// Mock that emits a single tool_call to `asking_mock`, then on the
 /// follow-up call (after the tool result or denial) emits a final text.
 struct AskingToolThenTextMock {
@@ -6252,10 +6533,11 @@ fn snapshot_keeps_metadata_only_reasoning_segment() {
         ],
     };
 
-    let (content, _tool_calls) = assistant_content_from_snapshot(
+    let content = assistant_content_from_snapshot(
         &snapshot,
         crate::tool_input_normalizer::ToolInputNormalizationContext { cwd: None },
-    );
+    )
+    .content_parts;
 
     let reasoning: Vec<_> = content
         .iter()
@@ -6277,4 +6559,102 @@ fn snapshot_keeps_metadata_only_reasoning_segment() {
         .and_then(|o| o.get("encryptedContent"))
         .and_then(|v| v.as_str());
     assert_eq!(ec, Some("ENC"), "encrypted_content carrier preserved");
+}
+
+#[test]
+fn snapshot_structured_content_survives_transcript_round_trip() {
+    let mut metadata = coco_llm_types::ProviderMetadata::default();
+    metadata.0.insert(
+        "provider".into(),
+        serde_json::json!({"opaque": "preserved"}),
+    );
+
+    let file = coco_llm_types::FilePart::from_base64("aGVsbG8=", "text/plain")
+        .with_filename("hello.txt")
+        .with_metadata(metadata.clone());
+    let reasoning_file =
+        coco_llm_types::ReasoningFilePart::from_base64("cGxhbg==", "application/pdf")
+            .with_metadata(metadata.clone());
+    let url_source = coco_llm_types::SourcePart::url("url-1", "https://example.com")
+        .with_metadata(metadata.clone());
+    let document_source =
+        coco_llm_types::SourcePart::document("doc-1", "Design", "application/pdf")
+            .with_filename("design.pdf")
+            .with_metadata(metadata.clone());
+    let custom = coco_llm_types::CustomPart::new("provider-extension")
+        .with_provider_metadata(metadata.clone());
+    let mut approval = coco_llm_types::ToolApprovalRequestPart::new("approval-1", "tool-1")
+        .with_tool_name("provider_tool")
+        .with_context("needs consent");
+    approval.provider_metadata = Some(metadata);
+
+    let snapshot = coco_inference::AssistantTurnSnapshot {
+        parts: vec![
+            coco_inference::TurnPart::File(file.clone()),
+            coco_inference::TurnPart::ReasoningFile(reasoning_file.clone()),
+            coco_inference::TurnPart::Source(url_source.clone()),
+            coco_inference::TurnPart::Source(document_source.clone()),
+            coco_inference::TurnPart::Custom(custom.clone()),
+            coco_inference::TurnPart::ToolApprovalRequest(approval.clone()),
+        ],
+    };
+    let expected = vec![
+        AssistantContentPart::File(file),
+        AssistantContentPart::ReasoningFile(reasoning_file),
+        AssistantContentPart::Source(url_source),
+        AssistantContentPart::Source(document_source),
+        AssistantContentPart::Custom(custom),
+        AssistantContentPart::ToolApprovalRequest(approval),
+    ];
+
+    let rebuilt = assistant_content_from_snapshot(
+        &snapshot,
+        crate::tool_input_normalizer::ToolInputNormalizationContext { cwd: None },
+    );
+    assert_eq!(rebuilt.content_parts, expected);
+    assert!(rebuilt.local_tool_calls.is_empty());
+    assert!(rebuilt.allows_empty_terminal);
+    assert_eq!(rebuilt.provider_approvals.len(), 1);
+    let content = rebuilt.content_parts;
+
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let paths = Arc::new(coco_paths::ProjectPaths::new(
+        tempdir.path().to_path_buf(),
+        std::path::Path::new("/typed-content-roundtrip"),
+    ));
+    let store = coco_session::TranscriptStore::new(paths);
+    let message = coco_messages::create_assistant_message(
+        content,
+        "mock-model",
+        coco_types::TokenUsage::default(),
+    );
+    let mut seen = std::collections::HashSet::new();
+    store
+        .append_message_chain(
+            "typed-content",
+            std::iter::once(&message),
+            &mut seen,
+            coco_session::storage::ChainWriteOptions {
+                cwd: "/typed-content-roundtrip".into(),
+                timestamp: "2026-08-11T00:00:00Z".into(),
+                ..Default::default()
+            },
+        )
+        .expect("append assistant content");
+
+    let entries = store
+        .load_transcript_messages("typed-content")
+        .expect("load transcript");
+    let restored = coco_session::storage::messages_from_transcript_entry(&entries[0]);
+    let coco_messages::Message::Assistant(assistant) = &restored[0] else {
+        panic!("expected assistant message");
+    };
+    let coco_llm_types::LlmMessage::Assistant {
+        content: restored_content,
+        ..
+    } = &assistant.message
+    else {
+        panic!("expected assistant LLM message");
+    };
+    assert_eq!(restored_content, &expected);
 }

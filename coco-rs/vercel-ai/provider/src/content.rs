@@ -596,15 +596,14 @@ impl UserContentPart {
 
 /// A reasoning file content part (file data that is part of reasoning).
 ///
-/// `data` is a 2-arm tagged union:
-/// - `Data { data }` — raw bytes or base64-encoded string.
-/// - `Url { url }` — a URL pointing to the file.
+/// Uses the same canonical file-data union as regular files so generated
+/// reasoning media can be externalized to a durable reference.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReasoningFilePart {
     /// The file data (raw bytes/base64 or URL).
-    pub data: crate::language_model::v4::file::LanguageModelV4FileData,
+    pub data: SharedV4FileData,
     /// Either a full IANA media type (`type/subtype`) or just the top-level
     /// segment (e.g. `image`, `audio`).
     pub media_type: String,
@@ -615,10 +614,7 @@ pub struct ReasoningFilePart {
 
 impl ReasoningFilePart {
     /// Create a new reasoning file part.
-    pub fn new(
-        data: crate::language_model::v4::file::LanguageModelV4FileData,
-        media_type: impl Into<String>,
-    ) -> Self {
+    pub fn new(data: SharedV4FileData, media_type: impl Into<String>) -> Self {
         Self {
             data,
             media_type: media_type.into(),
@@ -628,26 +624,17 @@ impl ReasoningFilePart {
 
     /// Create from base64 data.
     pub fn from_base64(base64: impl Into<String>, media_type: impl Into<String>) -> Self {
-        Self::new(
-            crate::language_model::v4::file::LanguageModelV4FileData::base64(base64),
-            media_type,
-        )
+        Self::new(SharedV4FileData::data_base64(base64), media_type)
     }
 
     /// Create from bytes.
     pub fn from_bytes(bytes: Vec<u8>, media_type: impl Into<String>) -> Self {
-        Self::new(
-            crate::language_model::v4::file::LanguageModelV4FileData::bytes(bytes),
-            media_type,
-        )
+        Self::new(SharedV4FileData::data_bytes(bytes), media_type)
     }
 
     /// Create from a URL.
     pub fn from_url(url: impl Into<String>, media_type: impl Into<String>) -> Self {
-        Self::new(
-            crate::language_model::v4::file::LanguageModelV4FileData::url(url),
-            media_type,
-        )
+        Self::new(SharedV4FileData::url(url), media_type)
     }
 
     /// Add provider metadata.
@@ -873,6 +860,9 @@ pub struct ToolApprovalRequestPart {
     pub approval_id: String,
     /// The tool call ID that this approval request is for.
     pub tool_call_id: String,
+    /// Arguments for the provider-hosted tool invocation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<JSONValue>,
     /// The tool name (optional).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
@@ -890,10 +880,17 @@ impl ToolApprovalRequestPart {
         Self {
             approval_id: approval_id.into(),
             tool_call_id: tool_call_id.into(),
+            input: None,
             tool_name: None,
             context: None,
             provider_metadata: None,
         }
+    }
+
+    /// Set the provider-hosted tool arguments.
+    pub fn with_input(mut self, input: JSONValue) -> Self {
+        self.input = Some(input);
+        self
     }
 
     /// Set the tool name.

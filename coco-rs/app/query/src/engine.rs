@@ -1022,10 +1022,52 @@ impl QueryEngine {
             .await;
             self.stamp_assistant_now();
 
-            let (content_parts, tool_calls) = assistant_content_from_snapshot(
+            let AssistantTurnContent {
+                content_parts: raw_content_parts,
+                local_tool_calls: tool_calls,
+                provider_approvals,
+                allows_empty_terminal,
+                requires_provider_continuation,
+            } = assistant_content_from_snapshot(
                 &snapshot,
                 crate::tool_input_normalizer::ToolInputNormalizationContext { cwd: None },
             );
+            let assistant_uuid = uuid::Uuid::new_v4();
+            let artifact_root = self.transcript_store.as_ref().and_then(|store| {
+                self.transcript_session_id
+                    .as_ref()
+                    .and_then(|session_id| store.session_artifact_dir(session_id.as_str()))
+            });
+            let content_parts = match crate::assistant_payload::externalize_assistant_payloads(
+                raw_content_parts,
+                artifact_root,
+                assistant_uuid,
+            )
+            .await
+            {
+                Ok(parts) => parts,
+                Err(error) => {
+                    let _ = crate::emit::emit_stream(
+                        &event_tx,
+                        crate::AgentStreamEvent::ResponseAttemptDiscarded {
+                            turn_id: event_turn_id.clone(),
+                            attempt: turn_state.attempt,
+                        },
+                    )
+                    .await;
+                    let result = self
+                        .handle_assistant_payload_error_terminal(
+                            &consts,
+                            &acc,
+                            &turn_state,
+                            &error.to_string(),
+                            history,
+                            &event_tx,
+                        )
+                        .await;
+                    return (Ok(result), None);
+                }
+            };
             let assistant_msg = Message::Assistant(coco_messages::AssistantMessage {
                 message: LlmMessage::Assistant {
                     content: content_parts
@@ -1034,7 +1076,7 @@ impl QueryEngine {
                         .collect(),
                     provider_options: None,
                 },
-                uuid: uuid::Uuid::new_v4(),
+                uuid: assistant_uuid,
                 model: model_id.clone(),
                 stop_reason: parsed_stop_reason,
                 usage: Some(usage),
@@ -1043,7 +1085,11 @@ impl QueryEngine {
                 api_error: None,
             });
 
-            if tool_calls.is_empty() {
+            if tool_calls.is_empty()
+                && provider_approvals.is_empty()
+                && !requires_provider_continuation
+                && !allows_empty_terminal
+            {
                 let structured_output_pending = self.config.requires_structured_output
                     && self.tools.get_by_name("StructuredOutput").is_some()
                     && acc.run_artifacts.structured_output.is_none();
@@ -1101,12 +1147,19 @@ impl QueryEngine {
                 self.config.log_assistant_responses,
             );
 
-            if !tool_calls.is_empty() {
+            if !tool_calls.is_empty()
+                || !provider_approvals.is_empty()
+                || requires_provider_continuation
+                || allows_empty_terminal
+            {
                 turn_state.empty_response_retries = 0;
                 turn_state.missing_tool_call_retries = 0;
             }
 
-            let withheld_opt = if tool_calls.is_empty() {
+            let withheld_opt = if tool_calls.is_empty()
+                && provider_approvals.is_empty()
+                && !requires_provider_continuation
+            {
                 parsed_stop_reason.and_then(crate::engine_stream_consume::withhold_reason_for_stop)
             } else {
                 None
@@ -1197,6 +1250,26 @@ impl QueryEngine {
                         .await;
                     return (Ok(result), None);
                 }
+            }
+
+            if !provider_approvals.is_empty() {
+                let responses = self
+                    .resolve_provider_approvals(&provider_approvals, assistant_uuid)
+                    .await;
+                for response in responses {
+                    crate::history_sync::history_push_and_emit(history, response, &event_tx).await;
+                }
+                turn_state.transition = Some(crate::ContinueReason::NextTurn);
+                turn_state.stop_hook_active = false;
+                turn_state.max_tokens_recovery_count = 0;
+                continue;
+            }
+
+            if requires_provider_continuation {
+                turn_state.transition = Some(crate::ContinueReason::NextTurn);
+                turn_state.stop_hook_active = false;
+                turn_state.max_tokens_recovery_count = 0;
+                continue;
             }
 
             let streaming_executed = streaming_ctx.is_some() && !tool_calls.is_empty();
@@ -1309,12 +1382,23 @@ impl QueryEngine {
 /// calls. Malformed JSON is skipped with a `tracing::warn!`,
 /// matching the previous behavior on the buffer-driven reconstruction
 /// path.
+pub(crate) struct AssistantTurnContent {
+    pub(crate) content_parts: Vec<AssistantContentPart>,
+    pub(crate) local_tool_calls: Vec<ToolCallPart>,
+    pub(crate) provider_approvals: Vec<coco_llm_types::ToolApprovalRequestPart>,
+    pub(crate) allows_empty_terminal: bool,
+    pub(crate) requires_provider_continuation: bool,
+}
+
 pub(crate) fn assistant_content_from_snapshot(
     snapshot: &coco_inference::AssistantTurnSnapshot,
     normalizer_ctx: crate::tool_input_normalizer::ToolInputNormalizationContext<'_>,
-) -> (Vec<AssistantContentPart>, Vec<ToolCallPart>) {
+) -> AssistantTurnContent {
     let mut content_parts: Vec<AssistantContentPart> = Vec::with_capacity(snapshot.parts.len());
-    let mut tool_calls: Vec<ToolCallPart> = Vec::new();
+    let mut local_tool_calls: Vec<ToolCallPart> = Vec::new();
+    let mut provider_approvals = Vec::new();
+    let mut allows_empty_terminal = false;
+    let mut requires_provider_continuation = false;
 
     for part in &snapshot.parts {
         match part {
@@ -1363,19 +1447,50 @@ pub(crate) fn assistant_content_from_snapshot(
                     provider_metadata: tc.provider_metadata.clone(),
                 };
                 content_parts.push(AssistantContentPart::ToolCall(tcp.clone()));
-                tool_calls.push(tcp);
+                if tcp.provider_executed == Some(true) {
+                    requires_provider_continuation = true;
+                } else {
+                    local_tool_calls.push(tcp);
+                }
             }
-            // File / ReasoningFile / Source / Custom / ToolApprovalRequest
-            // are not yet round-tripped through assistant history. Adding
-            // them here is a follow-up; for now they're emission-only via
-            // the live UI stream events. Drop with a trace.
-            other => {
-                tracing::trace!(?other, "snapshot variant not yet reconstructed");
+            coco_inference::TurnPart::ToolResult(result) => {
+                content_parts.push(AssistantContentPart::ToolResult(result.clone()));
+                requires_provider_continuation = true;
+            }
+            coco_inference::TurnPart::File(file) => {
+                content_parts.push(AssistantContentPart::File(file.clone()));
+                allows_empty_terminal = true;
+            }
+            coco_inference::TurnPart::ReasoningFile(file) => {
+                content_parts.push(AssistantContentPart::ReasoningFile(file.clone()));
+                allows_empty_terminal = true;
+            }
+            coco_inference::TurnPart::Source(source) => {
+                content_parts.push(AssistantContentPart::Source(source.clone()));
+                allows_empty_terminal = true;
+            }
+            coco_inference::TurnPart::Custom(custom) => {
+                content_parts.push(AssistantContentPart::Custom(custom.clone()));
+                if custom.kind == "openai-compaction" {
+                    requires_provider_continuation = true;
+                } else {
+                    allows_empty_terminal = true;
+                }
+            }
+            coco_inference::TurnPart::ToolApprovalRequest(request) => {
+                content_parts.push(AssistantContentPart::ToolApprovalRequest(request.clone()));
+                provider_approvals.push(request.clone());
             }
         }
     }
 
-    (content_parts, tool_calls)
+    AssistantTurnContent {
+        content_parts,
+        local_tool_calls,
+        provider_approvals,
+        allows_empty_terminal,
+        requires_provider_continuation,
+    }
 }
 
 pub(crate) fn tool_input_from_wire_state(

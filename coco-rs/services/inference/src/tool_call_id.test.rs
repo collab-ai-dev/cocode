@@ -1,10 +1,16 @@
 use super::*;
 use vercel_ai_provider::LanguageModelV4ToolCall;
 use vercel_ai_provider::LanguageModelV4ToolResult;
-use vercel_ai_provider::language_model::v4::LanguageModelV4ToolApprovalRequest;
+use vercel_ai_provider::ToolApprovalRequestPart;
 
 fn tool_call(id: &str, tool_name: &str) -> LanguageModelV4StreamPart {
     LanguageModelV4StreamPart::ToolCall(LanguageModelV4ToolCall::new(id, tool_name, "{}"))
+}
+
+fn provider_tool_call(id: &str, tool_name: &str) -> LanguageModelV4StreamPart {
+    let mut call = LanguageModelV4ToolCall::new(id, tool_name, "{}");
+    call.provider_executed = Some(true);
+    LanguageModelV4StreamPart::ToolCall(call)
 }
 
 fn input_start(id: &str, tool_name: &str) -> LanguageModelV4StreamPart {
@@ -97,30 +103,86 @@ fn overlapping_reuse_of_a_still_open_id_is_the_one_fatal_case() {
     assert!(error.to_string().contains("overlapping tool calls"));
 }
 
-/// Provider-executed result / approval parts are dropped downstream, so this
-/// seam deliberately leaves their ids alone rather than maintaining a binding
-/// nobody reads. Pinning it here so a future reader doesn't "fix" the omission
-/// without first wiring those parts into assistant content.
 #[test]
-fn result_and_approval_ids_are_left_verbatim() {
+fn approvals_follow_reused_provider_tool_call_ids_in_fifo_order() {
     let mut normalizer = ToolCallIdNormalizer::default();
-    let mut first = tool_call("reused", "first");
-    let mut second = tool_call("reused", "second");
+    let mut first = provider_tool_call("reused", "first");
+    let mut second = provider_tool_call("reused", "second");
     normalizer.normalize(&mut first).expect("first call");
     normalizer.normalize(&mut second).expect("second call");
     assert_eq!(call_id_of(&second), "reused_d2");
 
+    let mut first_approval = LanguageModelV4StreamPart::ToolApprovalRequest(
+        ToolApprovalRequestPart::new("approval-1", "reused"),
+    );
+    let mut second_approval = LanguageModelV4StreamPart::ToolApprovalRequest(
+        ToolApprovalRequestPart::new("approval-2", "reused"),
+    );
+    normalizer
+        .normalize(&mut first_approval)
+        .expect("first approval");
+    normalizer
+        .normalize(&mut second_approval)
+        .expect("second approval");
+
+    assert_eq!(call_id_of(&first_approval), "reused");
+    assert_eq!(call_id_of(&second_approval), "reused_d2");
+}
+
+#[test]
+fn provider_results_and_unmatched_approvals_remain_verbatim() {
+    let mut normalizer = ToolCallIdNormalizer::default();
     let mut result = LanguageModelV4StreamPart::ToolResult(LanguageModelV4ToolResult::new(
-        "reused",
-        "second",
+        "unknown",
+        "tool",
         serde_json::json!({}),
     ));
     let mut approval = LanguageModelV4StreamPart::ToolApprovalRequest(
-        LanguageModelV4ToolApprovalRequest::new("approval-1", "reused"),
+        ToolApprovalRequestPart::new("approval-1", "unknown"),
     );
     normalizer.normalize(&mut result).expect("result");
     normalizer.normalize(&mut approval).expect("approval");
+    assert_eq!(call_id_of(&result), "unknown");
+    assert_eq!(call_id_of(&approval), "unknown");
+}
 
-    assert_eq!(call_id_of(&result), "reused");
+#[test]
+fn final_provider_result_retires_stale_approval_binding() {
+    let mut normalizer = ToolCallIdNormalizer::default();
+    let mut completed = provider_tool_call("reused", "first");
+    normalizer.normalize(&mut completed).expect("first call");
+    let mut result = LanguageModelV4StreamPart::ToolResult(LanguageModelV4ToolResult::new(
+        "reused",
+        "first",
+        serde_json::json!({"ok": true}),
+    ));
+    normalizer.normalize(&mut result).expect("first result");
+
+    let mut awaiting = provider_tool_call("reused", "second");
+    normalizer.normalize(&mut awaiting).expect("second call");
+    let mut approval = LanguageModelV4StreamPart::ToolApprovalRequest(
+        ToolApprovalRequestPart::new("approval-2", "reused"),
+    );
+    normalizer.normalize(&mut approval).expect("approval");
+
+    assert_eq!(call_id_of(&awaiting), "reused_d2");
+    assert_eq!(call_id_of(&approval), "reused_d2");
+}
+
+#[test]
+fn preliminary_provider_result_keeps_approval_binding_alive() {
+    let mut normalizer = ToolCallIdNormalizer::default();
+    let mut call = provider_tool_call("reused", "preview");
+    normalizer.normalize(&mut call).expect("call");
+    let mut preview = LanguageModelV4StreamPart::ToolResult(
+        LanguageModelV4ToolResult::new("reused", "preview", serde_json::json!({}))
+            .with_preliminary(true),
+    );
+    normalizer.normalize(&mut preview).expect("preview");
+    let mut approval = LanguageModelV4StreamPart::ToolApprovalRequest(
+        ToolApprovalRequestPart::new("approval", "reused"),
+    );
+    normalizer.normalize(&mut approval).expect("approval");
+
     assert_eq!(call_id_of(&approval), "reused");
 }

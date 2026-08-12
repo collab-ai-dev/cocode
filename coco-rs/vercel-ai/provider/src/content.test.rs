@@ -176,12 +176,14 @@ fn test_assistant_content_part_source() {
 #[test]
 fn test_tool_approval_request_part() {
     let part = ToolApprovalRequestPart::new("approval_123", "call_456")
+        .with_input(json!({"path": "/tmp/file"}))
         .with_tool_name("delete_file")
         .with_context("This will permanently delete the file");
 
     assert_eq!(part.approval_id, "approval_123");
     assert_eq!(part.tool_call_id, "call_456");
     assert_eq!(part.tool_name, Some("delete_file".to_string()));
+    assert_eq!(part.input, Some(json!({"path": "/tmp/file"})));
     assert_eq!(
         part.context,
         Some("This will permanently delete the file".to_string())

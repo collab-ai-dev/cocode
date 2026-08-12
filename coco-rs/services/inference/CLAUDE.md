@@ -32,14 +32,11 @@ Tool-input handling lives in three layers, each owning a distinct concern:
   emission and snapshot accumulation. Sequential provider ID reuse becomes
   `id`, `id_d2`, …; an overlapping reuse (a second `ToolInputStart` for a
   still-open id) is the one fatal case — its deltas are unattributable, so the
-  stream aborts. `ToolResult` / `ToolApprovalRequest` ids are **left verbatim**:
-  both parts are dropped downstream (`stream.rs` keeps neither in the turn
-  snapshot; `app/query::assistant_content_from_snapshot` does not reconstruct
-  approval requests), so binding them to a renamed call is bookkeeping nobody
-  reads. Wiring either into assistant content is the trigger to add it back —
-  FIFO per reused raw ID, results preferring an unfinished call with the same
-  tool name, preliminary results not closing a call, and a mismatch that warns
-  instead of aborting. Provider adapters do not duplicate this generic policy.
+  stream aborts. Persisted `ToolApprovalRequest` parts bind to effective call
+  IDs through a per-raw-ID FIFO; requests emitted before the canonical close
+  bind to the active call. Unmatched approvals remain verbatim and non-fatal.
+  `ToolResult` ids remain untouched because provider results are not assistant
+  history. Provider adapters do not duplicate this generic policy.
   - **Scope is one response, by construction.** Duplicates that span messages
     (a provider that restarts numbering each turn, so a replayed prompt carries
     the same id N times — the Anthropic/DeepSeek `Duplicate value for
