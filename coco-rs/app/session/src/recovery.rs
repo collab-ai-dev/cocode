@@ -110,15 +110,18 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
                 segment.display()
             )));
         }
-        let reader = std::io::BufReader::new(std::fs::File::open(segment)?);
-        for line in reader.lines() {
-            let line = line?;
-            if line.trim().is_empty() {
+        let mut reader = std::io::BufReader::new(std::fs::File::open(segment)?);
+        let mut line = Vec::new();
+        while reader.read_until(b'\n', &mut line)? != 0 {
+            if line.iter().all(u8::is_ascii_whitespace) {
+                line.clear();
                 continue;
             }
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            let Ok(value) = serde_json::from_slice::<serde_json::Value>(&line) else {
+                line.clear();
                 continue;
             };
+            line.clear();
             let entry_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
             if !is_transcript_message_type(entry_type) {
                 if let Ok(meta) = serde_json::from_value::<MetadataEntry>(value) {
@@ -649,13 +652,18 @@ pub fn can_resume_session(transcript_path: &Path) -> bool {
         let Ok(file) = std::fs::File::open(segment) else {
             return false;
         };
-        for line in BufReader::new(file).lines() {
-            let Ok(line) = line else {
-                return false;
-            };
-            if !line.trim().is_empty() && serde_json::from_str::<serde_json::Value>(&line).is_ok() {
-                has_valid_entry = true;
+        let mut reader = BufReader::new(file);
+        let mut line = Vec::new();
+        loop {
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) => break,
+                Ok(_) if serde_json::from_slice::<serde_json::Value>(&line).is_ok() => {
+                    has_valid_entry = true;
+                }
+                Ok(_) => {}
+                Err(_) => return false,
             }
+            line.clear();
         }
     }
     has_valid_entry

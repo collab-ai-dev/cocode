@@ -72,9 +72,9 @@ fn fork_conversation_rejects_source_as_destination() {
 }
 
 #[test]
-fn can_resume_stops_after_the_first_valid_entry() {
+fn can_resume_tolerates_an_invalid_utf8_record_after_a_valid_entry() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("torn-tail.jsonl");
+    let path = dir.path().join("invalid-record.jsonl");
     let mut bytes = br#"{"session_id":"s1","uuid":"u1"}
 "#
     .to_vec();
@@ -83,7 +83,7 @@ fn can_resume_stops_after_the_first_valid_entry() {
 
     assert!(
         can_resume_session(&path),
-        "a valid prefix remains resumable when a later append is torn"
+        "a malformed record does not erase an earlier resumable entry"
     );
 }
 
@@ -646,14 +646,22 @@ fn test_load_conversation_for_resume_missing_file_errors() {
 
 #[test]
 fn test_load_conversation_for_resume_invalid_lines_skipped() {
-    // Malformed JSONL lines must not abort the whole resume — recovery
-    // is a best-effort path used after a crash.
+    // Malformed JSONL and invalid UTF-8 records must not abort the whole
+    // resume — recovery is a best-effort path used after a crash.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("s5.jsonl");
-    let body = format!(
-        "{}\nthis is not json at all\n{{\"type\":\"user\",\"uuid\":\"\",\n{}\n",
+    let mut body = format!(
+        "{}\nthis is not json at all\n{{\"type\":\"user\",\"uuid\":\"\",\n",
         user_line("u1", "good prompt"),
-        assistant_line("a1", "u1", "good reply", "claude-sonnet-4-6", Some((5, 5))),
+    )
+    .into_bytes();
+    body.extend_from_slice(&[0xff, 0xfe, b'\n']);
+    body.extend_from_slice(
+        format!(
+            "{}\n",
+            assistant_line("a1", "u1", "good reply", "claude-sonnet-4-6", Some((5, 5))),
+        )
+        .as_bytes(),
     );
     std::fs::write(&path, body).unwrap();
 
